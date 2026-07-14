@@ -63,7 +63,7 @@ func writeToRouterOS(ctx context.Context, client rosClient, addr, list string, t
 			"=.id=" + entry.Map[".id"],
 			"=timeout=" + wantTimeout,
 		}
-		if comment != entry.Map["comment"] {
+		if comment != "" && comment != entry.Map["comment"] {
 			setArgs = append(setArgs, "=comment="+comment)
 		}
 		_, err = client.RunArgsContext(ctx, setArgs)
