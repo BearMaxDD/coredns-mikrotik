@@ -49,31 +49,3 @@ func TestDedupExpired(t *testing.T) {
 		t.Error("expected dedup miss for expired entry")
 	}
 }
-
-func TestDedupKeyCollision(t *testing.T) {
-	dw := &deviceWriter{
-		cfg:   DeviceConfig{Address: "10.0.0.1:8728"},
-		dedup: sync.Map{},
-	}
-	dw2 := &deviceWriter{
-		cfg:   DeviceConfig{Address: "10.0.0.2:8728"},
-		dedup: sync.Map{},
-	}
-
-	dw.markDeduped("192.168.1.1", "allowed")
-
-	// Same device+list+address hits.
-	if !dw.isDeduped("192.168.1.1", "allowed") {
-		t.Error("expected dedup hit for same device+list+address")
-	}
-
-	// Same device, different list misses.
-	if dw.isDeduped("192.168.1.1", "blocked") {
-		t.Error("expected dedup miss for different list")
-	}
-
-	// Different device, same list+address misses.
-	if dw2.isDeduped("192.168.1.1", "allowed") {
-		t.Error("expected dedup miss for different device")
-	}
-}

@@ -9,8 +9,12 @@ func (dw *deviceWriter) dedupKey(addr, list string) string {
 }
 
 func (dw *deviceWriter) isDeduped(addr, list string) bool {
-	deadline, ok := dw.dedup.Load(dw.dedupKey(addr, list))
-	return ok && time.Now().Before(deadline.(time.Time))
+	v, ok := dw.dedup.Load(dw.dedupKey(addr, list))
+	if !ok {
+		return false
+	}
+	deadline, ok := v.(time.Time)
+	return ok && time.Now().Before(deadline)
 }
 
 func (dw *deviceWriter) markDeduped(addr, list string) {
