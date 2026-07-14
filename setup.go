@@ -1,7 +1,6 @@
 package mikrotik
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -9,7 +8,6 @@ import (
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
 	"github.com/coredns/coredns/plugin"
-	"github.com/miekg/dns"
 )
 
 // DeviceConfig holds the configuration for a single MikroTik device.
@@ -46,14 +44,6 @@ type Mikrotik struct {
 
 // Name implements plugin.Handler.
 func (m *Mikrotik) Name() string { return "mikrotik" }
-
-// ServeDNS implements plugin.Handler.
-func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	if m.Next != nil {
-		return m.Next.ServeDNS(ctx, w, r)
-	}
-	return dns.RcodeServerFailure, fmt.Errorf("mikrotik: no next plugin")
-}
 
 func init() {
 	plugin.Register("mikrotik", setup)
