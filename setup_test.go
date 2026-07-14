@@ -8,12 +8,17 @@ import (
 )
 
 func TestParseConfig(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
 	corefile := `mikrotik {
+    domains-file ` + domainPath + `
     device 10.0.0.1:8728 admin pass
     address-list4 v4list
     address-list6 v6list
     timeout 1h30m
     comment production
+    mask4 24
+    mask6 64
+    forward 8.8.8.8:53
 }`
 	c := caddy.NewTestController("dns", corefile)
 	m, err := parseConfig(c)
@@ -48,10 +53,24 @@ func TestParseConfig(t *testing.T) {
 	if w.cfg.Comment != "production" {
 		t.Errorf("Comment: want %q, got %q", "production", w.cfg.Comment)
 	}
+	if m.mask4 != 24 {
+		t.Errorf("mask4: want 24, got %d", m.mask4)
+	}
+	if m.mask6 != 64 {
+		t.Errorf("mask6: want 64, got %d", m.mask6)
+	}
+	if m.listForward != "8.8.8.8:53" {
+		t.Errorf("listForward: want %q, got %q", "8.8.8.8:53", m.listForward)
+	}
+	if m.domainList == nil {
+		t.Fatal("expected non-nil domainList")
+	}
 }
 
 func TestParseConfigMinimal(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
 	corefile := `mikrotik {
+    domains-file ` + domainPath + `
     device 10.0.0.1:8728 admin pass
 }`
 	c := caddy.NewTestController("dns", corefile)
@@ -77,34 +96,51 @@ func TestParseConfigMinimal(t *testing.T) {
 	}
 }
 
+// TestParseConfigNoDevice — device is now optional; config without device
+// but with domains-file should succeed.
 func TestParseConfigNoDevice(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
 	corefile := `mikrotik {
-    address-list4 test
+    domains-file ` + domainPath + `
+    forward 1.1.1.1:53
 }`
 	c := caddy.NewTestController("dns", corefile)
-	_, err := parseConfig(c)
-	if err == nil {
-		t.Fatal("expected error for missing device")
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if err.Error() != "no device configured" {
-		t.Errorf("error message: want %q, got %q", "no device configured", err.Error())
+	if len(m.writers) != 0 {
+		t.Fatalf("expected 0 writers, got %d", len(m.writers))
+	}
+	if m.listForward != "1.1.1.1:53" {
+		t.Errorf("listForward: want %q, got %q", "1.1.1.1:53", m.listForward)
+	}
+	if m.domainList == nil {
+		t.Fatal("expected non-nil domainList")
 	}
 }
 
 func TestParseConfigDeviceRequiredBeforeDirectives(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
 	corefile := `mikrotik {
+    domains-file ` + domainPath + `
     address-list4 test
     device 10.0.0.1:8728 admin pass
 }`
 	c := caddy.NewTestController("dns", corefile)
 	_, err := parseConfig(c)
 	if err == nil {
-		t.Fatal("expected error for directive before device")
+		t.Fatal("expected error for address-list4 before device")
+	}
+	if err.Error() != "address-list4 requires a device block" {
+		t.Errorf("error message: want %q, got %q", "address-list4 requires a device block", err.Error())
 	}
 }
 
 func TestParseConfigMultipleDevices(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
 	corefile := `mikrotik {
+    domains-file ` + domainPath + `
     device 10.0.0.1:8728 admin pass
     address-list4 v4
     device 192.168.88.1:8728 read write
@@ -131,5 +167,285 @@ func TestParseConfigMultipleDevices(t *testing.T) {
 	}
 	if w1.cfg.AddressList6 != "v6" {
 		t.Errorf("writer1 AddressList6: want %q, got %q", "v6", w1.cfg.AddressList6)
+	}
+}
+
+func TestParseConfigDomainsFileMissing(t *testing.T) {
+	corefile := `mikrotik {
+    domains-file /nonexistent/path/domains.txt
+}`
+	c := caddy.NewTestController("dns", corefile)
+	_, err := parseConfig(c)
+	if err == nil {
+		t.Fatal("expected error for missing domains-file")
+	}
+}
+
+func TestParseConfigDomainsFileRequired(t *testing.T) {
+	corefile := `mikrotik {
+    device 10.0.0.1:8728 admin pass
+}`
+	c := caddy.NewTestController("dns", corefile)
+	_, err := parseConfig(c)
+	if err == nil {
+		t.Fatal("expected error for missing domains-file")
+	}
+	if err.Error() != "domains-file is required" {
+		t.Errorf("error message: want %q, got %q", "domains-file is required", err.Error())
+	}
+}
+
+func TestParseConfigMask4Invalid(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    mask4 33
+}`
+	c := caddy.NewTestController("dns", corefile)
+	_, err := parseConfig(c)
+	if err == nil {
+		t.Fatal("expected error for invalid mask4")
+	}
+}
+
+func TestParseConfigMask6Invalid(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    mask6 129
+}`
+	c := caddy.NewTestController("dns", corefile)
+	_, err := parseConfig(c)
+	if err == nil {
+		t.Fatal("expected error for invalid mask6")
+	}
+}
+
+func TestParseConfigReload(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    reload 30s
+    device 10.0.0.1:8728 admin pass
+}`
+	c := caddy.NewTestController("dns", corefile)
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.domainList == nil {
+		t.Fatal("expected non-nil domainList")
+	}
+}
+
+func TestParseConfigDefaults(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    device 10.0.0.1:8728 admin pass
+}`
+	c := caddy.NewTestController("dns", corefile)
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.mask4 != 0 {
+		t.Errorf("mask4: want 0, got %d", m.mask4)
+	}
+	if m.mask6 != 0 {
+		t.Errorf("mask6: want 0, got %d", m.mask6)
+	}
+	if m.listForward != "" {
+		t.Errorf("listForward: want empty, got %q", m.listForward)
+	}
+}
+
+func TestParseConfigForwardAndDevice(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    forward 8.8.8.8:53
+    device 10.0.0.1:8728 admin pass
+    address-list4 test
+}`
+	c := caddy.NewTestController("dns", corefile)
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.listForward != "8.8.8.8:53" {
+		t.Errorf("listForward: want %q, got %q", "8.8.8.8:53", m.listForward)
+	}
+	if len(m.writers) != 1 {
+		t.Fatalf("expected 1 writer, got %d", len(m.writers))
+	}
+}
+
+func TestParseConfigDomainsFileBeforeDevice(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    device 10.0.0.1:8728 admin pass
+    address-list4 test
+}`
+	c := caddy.NewTestController("dns", corefile)
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.domainList == nil {
+		t.Fatal("expected non-nil domainList")
+	}
+	if len(m.writers) != 1 {
+		t.Fatalf("expected 1 writer, got %d", len(m.writers))
+	}
+}
+
+func TestParseConfigDeviceBeforeDomainsFile(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    device 10.0.0.1:8728 admin pass
+    domains-file ` + domainPath + `
+}`
+	c := caddy.NewTestController("dns", corefile)
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.domainList == nil {
+		t.Fatal("expected non-nil domainList")
+	}
+	if len(m.writers) != 1 {
+		t.Fatalf("expected 1 writer, got %d", len(m.writers))
+	}
+}
+
+func TestParseConfigForwardMissingArg(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    forward
+}`
+	c := caddy.NewTestController("dns", corefile)
+	_, err := parseConfig(c)
+	if err == nil {
+		t.Fatal("expected error for forward missing args")
+	}
+}
+
+func TestParseConfigMask4Zero(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    mask4 0
+    mask6 0
+    device 10.0.0.1:8728 admin pass
+}`
+	c := caddy.NewTestController("dns", corefile)
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.mask4 != 0 {
+		t.Errorf("mask4: want 0, got %d", m.mask4)
+	}
+	if m.mask6 != 0 {
+		t.Errorf("mask6: want 0, got %d", m.mask6)
+	}
+}
+
+func TestParseConfigMask4Max(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    mask4 32
+}`
+	c := caddy.NewTestController("dns", corefile)
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.mask4 != 32 {
+		t.Errorf("mask4: want 32, got %d", m.mask4)
+	}
+}
+
+func TestParseConfigMask6Max(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    mask6 128
+}`
+	c := caddy.NewTestController("dns", corefile)
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.mask6 != 128 {
+		t.Errorf("mask6: want 128, got %d", m.mask6)
+	}
+}
+
+func TestParseConfigAddressList6BeforeDevice(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    address-list6 v6
+    device 10.0.0.1:8728 admin pass
+}`
+	c := caddy.NewTestController("dns", corefile)
+	_, err := parseConfig(c)
+	if err == nil {
+		t.Fatal("expected error for address-list6 before device")
+	}
+	if err.Error() != "address-list6 requires a device block" {
+		t.Errorf("error message: want %q, got %q", "address-list6 requires a device block", err.Error())
+	}
+}
+
+func TestParseConfigTimeoutBeforeDevice(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    timeout 1h
+    device 10.0.0.1:8728 admin pass
+}`
+	c := caddy.NewTestController("dns", corefile)
+	_, err := parseConfig(c)
+	if err == nil {
+		t.Fatal("expected error for timeout before device")
+	}
+	if err.Error() != "timeout requires a device block" {
+		t.Errorf("error message: want %q, got %q", "timeout requires a device block", err.Error())
+	}
+}
+
+func TestParseConfigCommentBeforeDevice(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    comment mytag
+    device 10.0.0.1:8728 admin pass
+}`
+	c := caddy.NewTestController("dns", corefile)
+	_, err := parseConfig(c)
+	if err == nil {
+		t.Fatal("expected error for comment before device")
+	}
+	if err.Error() != "comment requires a device block" {
+		t.Errorf("error message: want %q, got %q", "comment requires a device block", err.Error())
+	}
+}
+
+func TestParseConfigUnknownDirective(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    bogus value
+}`
+	c := caddy.NewTestController("dns", corefile)
+	_, err := parseConfig(c)
+	if err == nil {
+		t.Fatal("expected error for unknown directive")
 	}
 }

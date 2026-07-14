@@ -3,6 +3,7 @@ package mikrotik
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
 	"github.com/coredns/coredns/plugin"
+	"github.com/miekg/dns"
 )
 
 // DeviceConfig holds the configuration for a single MikroTik device.
@@ -41,12 +43,24 @@ type deviceWriter struct {
 
 // Mikrotik is the CoreDNS plugin that manages MikroTik address-list entries.
 type Mikrotik struct {
-	Next    plugin.Handler
-	writers []*deviceWriter
+	Next        plugin.Handler
+	writers     []*deviceWriter
+	domainList  DomainMatcher
+	listForward string
+	mask4       int
+	mask6       int
 }
 
 // Name implements plugin.Handler.
 func (m *Mikrotik) Name() string { return "mikrotik" }
+
+// ResolveWithForward forwards a DNS query to the configured upstream and returns the response.
+func (m *Mikrotik) ResolveWithForward(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
+	c := new(dns.Client)
+	r.RecursionDesired = true
+	resp, _, err := c.ExchangeContext(ctx, r, m.listForward)
+	return resp, err
+}
 
 func init() {
 	plugin.Register("mikrotik", setup)
@@ -83,18 +97,63 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	m := &Mikrotik{}
 	var current *deviceWriter
 	seenDevice := false
-	directiveBeforeDevice := false
+	var domainsFilePath string
+	var reloadInterval time.Duration
 
 	for c.Next() {
 		for c.NextBlock() {
 			switch c.Val() {
+			case "domains-file":
+				args := c.RemainingArgs()
+				if len(args) != 1 {
+					return nil, c.ArgErr()
+				}
+				domainsFilePath = args[0]
+
+			case "reload":
+				args := c.RemainingArgs()
+				if len(args) != 1 {
+					return nil, c.ArgErr()
+				}
+				d, err := time.ParseDuration(args[0])
+				if err != nil {
+					return nil, fmt.Errorf("invalid reload duration %q: %v", args[0], err)
+				}
+				reloadInterval = d
+
+			case "mask4":
+				args := c.RemainingArgs()
+				if len(args) != 1 {
+					return nil, c.ArgErr()
+				}
+				n, err := strconv.Atoi(args[0])
+				if err != nil || n < 0 || n > 32 {
+					return nil, fmt.Errorf("invalid mask4 %q: must be 0-32", args[0])
+				}
+				m.mask4 = n
+
+			case "mask6":
+				args := c.RemainingArgs()
+				if len(args) != 1 {
+					return nil, c.ArgErr()
+				}
+				n, err := strconv.Atoi(args[0])
+				if err != nil || n < 0 || n > 128 {
+					return nil, fmt.Errorf("invalid mask6 %q: must be 0-128", args[0])
+				}
+				m.mask6 = n
+
+			case "forward":
+				args := c.RemainingArgs()
+				if len(args) != 1 {
+					return nil, c.ArgErr()
+				}
+				m.listForward = args[0]
+
 			case "device":
 				args := c.RemainingArgs()
 				if len(args) != 3 {
 					return nil, c.ArgErr()
-				}
-				if !seenDevice && directiveBeforeDevice {
-				return nil, fmt.Errorf("directives must follow device declarations")
 				}
 				seenDevice = true
 				current = &deviceWriter{
@@ -104,7 +163,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 						Password: args[2],
 						Timeout:  24 * time.Hour,
 					},
-				queue: make(chan writeItem, 1024),
+					queue: make(chan writeItem, 1024),
 					stop:  make(chan struct{}),
 				}
 				m.writers = append(m.writers, current)
@@ -115,8 +174,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 					return nil, c.ArgErr()
 				}
 				if !seenDevice {
-					directiveBeforeDevice = true
-					continue
+					return nil, fmt.Errorf("address-list4 requires a device block")
 				}
 				current.cfg.AddressList4 = args[0]
 
@@ -126,8 +184,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 					return nil, c.ArgErr()
 				}
 				if !seenDevice {
-					directiveBeforeDevice = true
-					continue
+					return nil, fmt.Errorf("address-list6 requires a device block")
 				}
 				current.cfg.AddressList6 = args[0]
 
@@ -137,12 +194,11 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 					return nil, c.ArgErr()
 				}
 				if !seenDevice {
-					directiveBeforeDevice = true
-					continue
+					return nil, fmt.Errorf("timeout requires a device block")
 				}
 				d, err := time.ParseDuration(args[0])
 				if err != nil {
-				return nil, fmt.Errorf("invalid timeout %q: %v", args[0], err)
+					return nil, fmt.Errorf("invalid timeout %q: %v", args[0], err)
 				}
 				current.cfg.Timeout = d
 
@@ -152,8 +208,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 					return nil, c.ArgErr()
 				}
 				if !seenDevice {
-					directiveBeforeDevice = true
-					continue
+					return nil, fmt.Errorf("comment requires a device block")
 				}
 				current.cfg.Comment = args[0]
 
@@ -163,9 +218,15 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 		}
 	}
 
-	if !seenDevice {
-		return nil, fmt.Errorf("no device configured")
+	if domainsFilePath == "" {
+		return nil, fmt.Errorf("domains-file is required")
 	}
+
+	dl, err := NewDomainList(domainsFilePath, reloadInterval)
+	if err != nil {
+		return nil, fmt.Errorf("loading domains-file: %v", err)
+	}
+	m.domainList = dl
 
 	return m, nil
 }
