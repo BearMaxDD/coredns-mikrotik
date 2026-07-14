@@ -1,0 +1,34 @@
+// geosite.proto — Minimal V2Ray GeoSite protobuf schema.
+// This is a subset of the V2Ray/Xray routercommon proto, defining only
+// the types needed to decode geosite.dat files.
+syntax = "proto3";
+
+package geosite;
+option go_package = "netctrldns-next/internal/geosite;geosite";
+
+message Domain {
+  enum Type {
+    Plain = 0;
+    Regex = 1;
+    RootDomain = 2;
+    Full = 3;
+  }
+
+  Type type = 1;
+  string value = 2;
+
+  message Attribute {
+    string key = 1;
+    string value = 2;
+  }
+  repeated Attribute attribute = 3;
+}
+
+message GeoSite {
+  string country_code = 1;
+  repeated Domain domain = 2;
+}
+
+message GeoSiteList {
+  repeated GeoSite entry = 1;
+}

@@ -33,47 +33,8 @@ func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 			return dns.RcodeServerFailure, err
 		}
 
-		// Enqueue A/AAAA addresses if writers are configured.
 		if len(m.writers) > 0 && resp != nil {
-			for _, ans := range resp.Answer {
-				var addr string
-				var mask int
-				var list string
-				switch rr := ans.(type) {
-				case *dns.A:
-					addr = rr.A.String()
-					mask = route.Mask4
-					if mask < 0 {
-						mask = 0
-					}
-					list = route.AddressList4
-					if list == "" && len(m.writers) > 0 {
-						list = m.writers[0].cfg.AddressList4
-					}
-				case *dns.AAAA:
-					addr = rr.AAAA.String()
-					mask = route.Mask6
-					if mask < 0 {
-						mask = 0
-					}
-					list = route.AddressList6
-					if list == "" && len(m.writers) > 0 {
-						list = m.writers[0].cfg.AddressList6
-					}
-				default:
-					continue
-				}
-				if list == "" {
-					continue
-				}
-				for _, dw := range m.writers {
-					select {
-					case dw.queue <- writeItem{address: addr, list: list, mask: mask}:
-					default:
-						queueDroppedCount.WithLabelValues(dw.cfg.Address).Inc()
-					}
-				}
-			}
+			m.enqueueAddresses(resp, route)
 		}
 
 		w.WriteMsg(resp)
@@ -82,6 +43,41 @@ func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 
 	// No route matched — pass through to next plugin.
 	return m.Next.ServeDNS(ctx, w, r)
+}
+
+// enqueueAddresses extracts A and AAAA addresses from the response and writes
+// them to the MikroTik devices' queues using the RouteRule's address-list and
+// mask settings.
+func (m *Mikrotik) enqueueAddresses(resp *dns.Msg, route RouteRule) {
+	for _, ans := range resp.Answer {
+		var addr, list string
+		var mask int
+		switch rr := ans.(type) {
+		case *dns.A:
+			addr = rr.A.String()
+			list = route.AddressList4
+			mask = route.Mask4
+		case *dns.AAAA:
+			addr = rr.AAAA.String()
+			list = route.AddressList6
+			mask = route.Mask6
+		default:
+			continue
+		}
+		if list == "" || addr == "" {
+			continue
+		}
+		if mask < 0 {
+			mask = 0
+		}
+		for _, dw := range m.writers {
+			select {
+			case dw.queue <- writeItem{address: addr, list: list, mask: mask}:
+			default:
+				queueDroppedCount.WithLabelValues(dw.cfg.Address).Inc()
+			}
+		}
+	}
 }
 
 // ensure Mikrotik implements plugin.Handler.

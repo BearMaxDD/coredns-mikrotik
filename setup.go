@@ -54,7 +54,6 @@ type Mikrotik struct {
 	exchange func(ctx context.Context, r *dns.Msg) (*dns.Msg, error)
 }
 
-
 // resolveWithForward forwards a DNS query to the given upstream address and returns the response.
 func (m *Mikrotik) resolveWithForward(ctx context.Context, r *dns.Msg, addr string) (*dns.Msg, error) {
 	if m.exchange != nil {
@@ -65,6 +64,7 @@ func (m *Mikrotik) resolveWithForward(ctx context.Context, r *dns.Msg, addr stri
 	resp, _, err := c.ExchangeContext(ctx, r, addr)
 	return resp, err
 }
+
 func init() {
 	plugin.Register("mikrotik", setup)
 }
@@ -87,6 +87,16 @@ func setup(c *caddy.Controller) error {
 		})
 	}
 
+	// Close all route matchers on shutdown.
+	c.OnShutdown(func() error {
+		for _, route := range m.routes {
+			if route.Matcher != nil {
+				route.Matcher.Close()
+			}
+		}
+		return nil
+	})
+
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
 		m.Next = next
 		return m
@@ -96,14 +106,46 @@ func setup(c *caddy.Controller) error {
 }
 
 // parseConfig parses the mikrotik configuration block from Corefile.
+// Accepted directives:
+//
+//	device <addr> <user> <pass>               — MikroTik API endpoint (repeatable)
+//	timeout <duration>                        — per-device connection timeout
+//	comment <text>                            — comment added to address-list entries
+//	forward <addr>                            — default upstream DNS resolver
+//	address-list4 <name>                      — default IPv4 address-list name
+//	address-list6 <name>                      — default IPv6 address-list name
+//	mask4 <n>                                 — default IPv4 prefix length (0-32)
+//	mask6 <n>                                 — default IPv6 prefix length (0-128)
+//	domains-file <path>                       — route using plain domain list
+//	reload <duration>                         — domain list reload interval
+//	geosite-file <path>                       — path to V2Ray geosite.dat
+//	geosite <code> [opt val ...]              — route using geosite country code
+//	  Options (one line): address-list4, address-list6, mask4, mask6
 func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	m := &Mikrotik{}
-	var routeMask4, routeMask6 int
-	var routeForward string
 	var current *deviceWriter
 	seenDevice := false
-	var domainsFilePath string
 	var reloadInterval time.Duration
+	var geositeFilePath string
+	// Route-level defaults: routes that don't override use these.
+	defaultMask4 := 0
+	defaultMask6 := 0
+	var defaultRouteForward string
+	var defaultAddrList4 string
+	var defaultAddrList6 string
+
+	// Deferred route specs preserved in config order.
+	// Override fields: empty means "use final default", mask -1 means "not set".
+	type routeSpec struct {
+		kind        string // "domains" or "geosite"
+		path        string // domains-file path or geosite code
+		reload      time.Duration
+		ovAddrList4 string
+		ovAddrList6 string
+		ovMask4     int // -1 = not set
+		ovMask6     int // -1 = not set
+	}
+	var routeSpecs []routeSpec
 
 	for c.Next() {
 		for c.NextBlock() {
@@ -113,7 +155,13 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				if len(args) != 1 {
 					return nil, c.ArgErr()
 				}
-				domainsFilePath = args[0]
+				routeSpecs = append(routeSpecs, routeSpec{
+					kind:    "domains",
+					path:    args[0],
+					reload:  reloadInterval,
+					ovMask4: -1,
+					ovMask6: -1,
+				})
 
 			case "reload":
 				args := c.RemainingArgs()
@@ -135,7 +183,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				if err != nil || n < 0 || n > 32 {
 					return nil, fmt.Errorf("invalid mask4 %q: must be 0-32", args[0])
 				}
-				routeMask4 = n
+				defaultMask4 = n
 
 			case "mask6":
 				args := c.RemainingArgs()
@@ -146,16 +194,110 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				if err != nil || n < 0 || n > 128 {
 					return nil, fmt.Errorf("invalid mask6 %q: must be 0-128", args[0])
 				}
-				routeMask6 = n
+				defaultMask6 = n
 
 			case "forward":
 				args := c.RemainingArgs()
 				if len(args) != 1 {
 					return nil, c.ArgErr()
 				}
-				routeForward = args[0]
+				defaultRouteForward = args[0]
 				m.listForward = args[0]
 
+			case "address-list4":
+				args := c.RemainingArgs()
+				if len(args) != 1 {
+					return nil, c.ArgErr()
+				}
+				defaultAddrList4 = args[0]
+				if seenDevice && current != nil {
+					current.cfg.AddressList4 = args[0]
+				}
+
+			case "address-list6":
+				args := c.RemainingArgs()
+				if len(args) != 1 {
+					return nil, c.ArgErr()
+				}
+				defaultAddrList6 = args[0]
+				if seenDevice && current != nil {
+					current.cfg.AddressList6 = args[0]
+				}
+
+			case "geosite-file":
+				args := c.RemainingArgs()
+				if len(args) != 1 {
+					return nil, c.ArgErr()
+				}
+				geositeFilePath = args[0]
+
+			case "geosite":
+				args := c.RemainingArgs()
+				if len(args) < 1 {
+					return nil, c.ArgErr()
+				}
+				if geositeFilePath == "" {
+					return nil, fmt.Errorf("geosite directive requires geosite-file to be set first")
+				}
+
+				// Parse remaining args as key-value pairs.
+				ovAddrList4 := ""
+				ovAddrList6 := ""
+				ovMask4 := -1
+				ovMask6 := -1
+
+				i := 1
+				for i < len(args) {
+					switch args[i] {
+					case "address-list4":
+						i++
+						if i >= len(args) {
+							return nil, fmt.Errorf("geosite: address-list4 requires a value")
+						}
+						ovAddrList4 = args[i]
+						i++
+					case "address-list6":
+						i++
+						if i >= len(args) {
+							return nil, fmt.Errorf("geosite: address-list6 requires a value")
+						}
+						ovAddrList6 = args[i]
+						i++
+					case "mask4":
+						i++
+						if i >= len(args) {
+							return nil, fmt.Errorf("geosite: mask4 requires a value")
+						}
+						n, err := strconv.Atoi(args[i])
+						if err != nil || n < 0 || n > 32 {
+							return nil, fmt.Errorf("geosite: invalid mask4 %q: must be 0-32", args[i])
+						}
+						ovMask4 = n
+						i++
+					case "mask6":
+						i++
+						if i >= len(args) {
+							return nil, fmt.Errorf("geosite: mask6 requires a value")
+						}
+						n, err := strconv.Atoi(args[i])
+						if err != nil || n < 0 || n > 128 {
+							return nil, fmt.Errorf("geosite: invalid mask6 %q: must be 0-128", args[i])
+						}
+						ovMask6 = n
+						i++
+					default:
+						return nil, fmt.Errorf("geosite: unknown option %q", args[i])
+					}
+				}
+
+				routeSpecs = append(routeSpecs, routeSpec{
+					kind:        "geosite",
+					path:        args[0], // country code
+					ovAddrList4: ovAddrList4,
+					ovAddrList6: ovAddrList6,
+					ovMask4:     ovMask4,
+					ovMask6:     ovMask6,
+				})
 
 			case "device":
 				args := c.RemainingArgs()
@@ -174,26 +316,6 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 					stop:  make(chan struct{}),
 				}
 				m.writers = append(m.writers, current)
-
-			case "address-list4":
-				args := c.RemainingArgs()
-				if len(args) != 1 {
-					return nil, c.ArgErr()
-				}
-				if !seenDevice {
-					return nil, fmt.Errorf("address-list4 requires a device block")
-				}
-				current.cfg.AddressList4 = args[0]
-
-			case "address-list6":
-				args := c.RemainingArgs()
-				if len(args) != 1 {
-					return nil, c.ArgErr()
-				}
-				if !seenDevice {
-					return nil, fmt.Errorf("address-list6 requires a device block")
-				}
-				current.cfg.AddressList6 = args[0]
 
 			case "timeout":
 				args := c.RemainingArgs()
@@ -225,20 +347,59 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 		}
 	}
 
-	if domainsFilePath == "" {
-		return nil, fmt.Errorf("domains-file is required")
+	// Create all deferred routes in config order, resolving overrides
+	// against the final default values.
+	for _, rs := range routeSpecs {
+		addrList4 := defaultAddrList4
+		if rs.ovAddrList4 != "" {
+			addrList4 = rs.ovAddrList4
+		}
+		addrList6 := defaultAddrList6
+		if rs.ovAddrList6 != "" {
+			addrList6 = rs.ovAddrList6
+		}
+		mask4 := defaultMask4
+		if rs.ovMask4 >= 0 {
+			mask4 = rs.ovMask4
+		}
+		mask6 := defaultMask6
+		if rs.ovMask6 >= 0 {
+			mask6 = rs.ovMask6
+		}
+
+		switch rs.kind {
+		case "domains":
+			dl, err := NewDomainList(rs.path, rs.reload)
+			if err != nil {
+				return nil, fmt.Errorf("loading domains-file: %v", err)
+			}
+			m.routes = append(m.routes, RouteRule{
+				Matcher:      dl,
+				Forward:      defaultRouteForward,
+				AddressList4: addrList4,
+				AddressList6: addrList6,
+				Mask4:        mask4,
+				Mask6:        mask6,
+			})
+		case "geosite":
+			gm, err := NewGeoSiteMatcher(geositeFilePath, rs.path)
+			if err != nil {
+				return nil, fmt.Errorf("geosite %s: %v", rs.path, err)
+			}
+			m.routes = append(m.routes, RouteRule{
+				Matcher:      gm,
+				Forward:      defaultRouteForward,
+				AddressList4: addrList4,
+				AddressList6: addrList6,
+				Mask4:        mask4,
+				Mask6:        mask6,
+			})
+		}
 	}
 
-	dl, err := NewDomainList(domainsFilePath, reloadInterval)
-	if err != nil {
-		return nil, fmt.Errorf("loading domains-file: %v", err)
+	if len(m.routes) == 0 && len(m.writers) == 0 {
+		return nil, fmt.Errorf("at least one of: domains-file, geosite, or device is required")
 	}
-	m.routes = append(m.routes, RouteRule{
-		Matcher: dl,
-		Forward: routeForward,
-		Mask4:   routeMask4,
-		Mask6:   routeMask6,
-	})
 
 	return m, nil
 }

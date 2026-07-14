@@ -59,11 +59,11 @@ func TestParseConfig(t *testing.T) {
 	if m.routes[0].Matcher == nil {
 		t.Fatal("expected non-nil Matcher")
 	}
-	if m.routes[0].AddressList4 != "" {
-		t.Errorf("AddressList4: want empty, got %q", m.routes[0].AddressList4)
+	if m.routes[0].AddressList4 != "v4list" {
+		t.Errorf("AddressList4: want %q, got %q", "v4list", m.routes[0].AddressList4)
 	}
-	if m.routes[0].AddressList6 != "" {
-		t.Errorf("AddressList6: want empty, got %q", m.routes[0].AddressList6)
+	if m.routes[0].AddressList6 != "v6list" {
+		t.Errorf("AddressList6: want %q, got %q", "v6list", m.routes[0].AddressList6)
 	}
 	if m.routes[0].Mask4 != 24 {
 		t.Errorf("Mask4: want 24, got %d", m.routes[0].Mask4)
@@ -146,12 +146,18 @@ func TestParseConfigDeviceRequiredBeforeDirectives(t *testing.T) {
     device 10.0.0.1:8728 admin pass
 }`
 	c := caddy.NewTestController("dns", corefile)
-	_, err := parseConfig(c)
-	if err == nil {
-		t.Fatal("expected error for address-list4 before device")
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if err.Error() != "address-list4 requires a device block" {
-		t.Errorf("error message: want %q, got %q", "address-list4 requires a device block", err.Error())
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
+	}
+	if m.routes[0].AddressList4 != "test" {
+		t.Errorf("AddressList4: want %q, got %q", "test", m.routes[0].AddressList4)
+	}
+	if len(m.writers) != 1 {
+		t.Fatalf("expected 1 writer, got %d", len(m.writers))
 	}
 }
 
@@ -199,17 +205,20 @@ func TestParseConfigDomainsFileMissing(t *testing.T) {
 	}
 }
 
-func TestParseConfigDomainsFileRequired(t *testing.T) {
+func TestParseConfigDeviceOnly(t *testing.T) {
 	corefile := `mikrotik {
     device 10.0.0.1:8728 admin pass
 }`
 	c := caddy.NewTestController("dns", corefile)
-	_, err := parseConfig(c)
-	if err == nil {
-		t.Fatal("expected error for missing domains-file")
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if err.Error() != "domains-file is required" {
-		t.Errorf("error message: want %q, got %q", "domains-file is required", err.Error())
+	if len(m.writers) != 1 {
+		t.Fatalf("expected 1 writer, got %d", len(m.writers))
+	}
+	if len(m.routes) != 0 {
+		t.Fatalf("expected 0 routes, got %d", len(m.routes))
 	}
 }
 
@@ -433,7 +442,6 @@ func TestParseConfigMask6Max(t *testing.T) {
 		t.Errorf("Mask6: want 128, got %d", m.routes[0].Mask6)
 	}
 }
-
 func TestParseConfigAddressList6BeforeDevice(t *testing.T) {
 	domainPath := writeDomainFile(t, "example.com\n")
 	corefile := `mikrotik {
@@ -442,29 +450,15 @@ func TestParseConfigAddressList6BeforeDevice(t *testing.T) {
     device 10.0.0.1:8728 admin pass
 }`
 	c := caddy.NewTestController("dns", corefile)
-	_, err := parseConfig(c)
-	if err == nil {
-		t.Fatal("expected error for address-list6 before device")
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if err.Error() != "address-list6 requires a device block" {
-		t.Errorf("error message: want %q, got %q", "address-list6 requires a device block", err.Error())
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
 	}
-}
-
-func TestParseConfigTimeoutBeforeDevice(t *testing.T) {
-	domainPath := writeDomainFile(t, "example.com\n")
-	corefile := `mikrotik {
-    domains-file ` + domainPath + `
-    timeout 1h
-    device 10.0.0.1:8728 admin pass
-}`
-	c := caddy.NewTestController("dns", corefile)
-	_, err := parseConfig(c)
-	if err == nil {
-		t.Fatal("expected error for timeout before device")
-	}
-	if err.Error() != "timeout requires a device block" {
-		t.Errorf("error message: want %q, got %q", "timeout requires a device block", err.Error())
+	if m.routes[0].AddressList6 != "v6" {
+		t.Errorf("AddressList6: want %q, got %q", "v6", m.routes[0].AddressList6)
 	}
 }
 

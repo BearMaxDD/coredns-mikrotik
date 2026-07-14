@@ -49,8 +49,10 @@ func TestServeDNSDomainMatchExtract(t *testing.T) {
 				Matcher: &testDomainMatcher{
 					matchFunc: func(domain string) bool { return domain == "example.com." },
 				},
-				Mask4: 24,
-				Mask6: 64,
+				AddressList4: "allowed-v4",
+				AddressList6: "allowed-v6",
+				Mask4:        24,
+				Mask6:        64,
 			},
 		},
 		writers: []*deviceWriter{
