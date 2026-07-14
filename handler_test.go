@@ -29,10 +29,26 @@ func (w *testResponseWriter) LocalAddr() net.Addr {
 	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 53}
 }
 
-// TestServeDNSEnqueue — downstream returns an A record; verify queue gets one item.
-func TestServeDNSEnqueue(t *testing.T) {
+// testDomainMatcher implements DomainMatcher for testing.
+type testDomainMatcher struct {
+	matchFunc func(domain string) bool
+}
+
+func (m *testDomainMatcher) Match(domain string) bool {
+	return m.matchFunc(domain)
+}
+func (m *testDomainMatcher) Close() {}
+
+// TestServeDNSDomainMatchExtract — domain list matches; mock exchange returns
+// A and AAAA records; verify queue items include the correct mask.
+func TestServeDNSDomainMatchExtract(t *testing.T) {
 	ctx := context.Background()
 	m := &Mikrotik{
+		mask4: 24,
+		mask6: 64,
+		domainList: &testDomainMatcher{
+			matchFunc: func(domain string) bool { return domain == "example.com." },
+		},
 		writers: []*deviceWriter{
 			{
 				cfg:   DeviceConfig{Address: "10.0.0.1:8728", AddressList4: "allowed-v4", AddressList6: "allowed-v6"},
@@ -40,120 +56,21 @@ func TestServeDNSEnqueue(t *testing.T) {
 				dedup: sync.Map{},
 			},
 		},
-		Next: plugin.HandlerFunc(func(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-			resp := new(dns.Msg)
-			resp.SetReply(r)
-			resp.Answer = append(resp.Answer, &dns.A{
-				Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-				A:   net.ParseIP("10.0.0.5"),
-			})
-			err := w.WriteMsg(resp)
-			return dns.RcodeSuccess, err
-		}),
-	}
-
-	req := new(dns.Msg)
-	req.SetQuestion("example.com.", dns.TypeA)
-
-	w := &testResponseWriter{}
-	rcode, err := m.ServeDNS(ctx, w, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if rcode != dns.RcodeSuccess {
-		t.Fatalf("expected RcodeSuccess, got %d", rcode)
-	}
-
-	select {
-	case item := <-m.writers[0].queue:
-		if item.address != "10.0.0.5" {
-			t.Errorf("expected address 10.0.0.5, got %s", item.address)
-		}
-		if item.list != "allowed-v4" {
-			t.Errorf("expected list allowed-v4, got %s", item.list)
-		}
-	default:
-		t.Fatal("expected a writeItem in the queue, but queue was empty")
-	}
-
-	// Verify only one item was enqueued.
-	if len(m.writers[0].queue) != 0 {
-		t.Fatal("expected exactly one item in the queue")
-	}
-}
-
-// TestServeDNSNoResponse — downstream returns SERVFAIL; verify queue stays empty.
-func TestServeDNSNoResponse(t *testing.T) {
-	ctx := context.Background()
-	m := &Mikrotik{
-		writers: []*deviceWriter{
-			{
-				cfg:   DeviceConfig{Address: "10.0.0.1:8728", AddressList4: "allowed-v4"},
-				queue: make(chan writeItem, 10),
-				dedup: sync.Map{},
-			},
-		},
-		Next: plugin.HandlerFunc(func(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-			return dns.RcodeServerFailure, nil
-		}),
-	}
-
-	req := new(dns.Msg)
-	req.SetQuestion("example.com.", dns.TypeA)
-
-	w := &testResponseWriter{}
-	rcode, err := m.ServeDNS(ctx, w, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if rcode != dns.RcodeServerFailure {
-		t.Fatalf("expected RcodeServerFailure, got %d", rcode)
-	}
-
-	select {
-	case item := <-m.writers[0].queue:
-		t.Fatalf("expected empty queue, got item: %+v", item)
-	default:
-		// Queue is empty — expected.
-	}
-}
-
-// TestServeDNSMultipleAddresses — downstream returns multiple A records;
-// verify queue has multiple items.
-func TestServeDNSMultipleAddresses(t *testing.T) {
-	ctx := context.Background()
-	m := &Mikrotik{
-		writers: []*deviceWriter{
-			{
-				cfg:   DeviceConfig{Address: "10.0.0.1:8728", AddressList4: "allowed-v4", AddressList6: "allowed-v6"},
-				queue: make(chan writeItem, 10),
-				dedup: sync.Map{},
-			},
-		},
-		Next: plugin.HandlerFunc(func(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
 			resp := new(dns.Msg)
 			resp.SetReply(r)
 			resp.Answer = append(resp.Answer,
 				&dns.A{
-					Hdr: dns.RR_Header{Name: "svc1.example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-					A:   net.ParseIP("10.0.0.1"),
+					Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+					A:   net.ParseIP("10.0.0.5"),
 				},
 				&dns.AAAA{
-					Hdr: dns.RR_Header{Name: "svc2.example.com.", Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 60},
+					Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 60},
 					AAAA: net.ParseIP("2001:db8::1"),
 				},
-				&dns.A{
-					Hdr: dns.RR_Header{Name: "svc3.example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-					A:   net.ParseIP("10.0.0.2"),
-				},
-				&dns.TXT{
-					Hdr: dns.RR_Header{Name: "txt.example.com.", Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
-					Txt: []string{"hello"},
-				},
 			)
-			err := w.WriteMsg(resp)
-			return dns.RcodeSuccess, err
-		}),
+			return resp, nil
+		},
 	}
 
 	req := new(dns.Msg)
@@ -168,7 +85,7 @@ func TestServeDNSMultipleAddresses(t *testing.T) {
 		t.Fatalf("expected RcodeSuccess, got %d", rcode)
 	}
 
-	// Drain the queue and count IP-based items.
+	// Drain queue.
 	var items []writeItem
 	for {
 		select {
@@ -180,22 +97,219 @@ func TestServeDNSMultipleAddresses(t *testing.T) {
 	}
 done:
 
-	if len(items) != 3 {
-		t.Fatalf("expected 3 writeItems (2x A + 1x AAAA), got %d: %+v", len(items), items)
+	if len(items) != 2 {
+		t.Fatalf("expected 2 writeItems (1x A + 1x AAAA), got %d: %+v", len(items), items)
 	}
 
-	// Check specific addresses.
-	addrs := make(map[string]string)
+	var v4Item, v6Item writeItem
 	for _, item := range items {
-		addrs[item.address] = item.list
+		switch item.address {
+		case "10.0.0.5":
+			v4Item = item
+		case "2001:db8::1":
+			v6Item = item
+		}
 	}
-	if addrs["10.0.0.1"] != "allowed-v4" {
-		t.Errorf("expected 10.0.0.1 -> allowed-v4, got %s", addrs["10.0.0.1"])
+
+	if v4Item.address != "10.0.0.5" || v4Item.list != "allowed-v4" {
+		t.Errorf("expected 10.0.0.5 -> allowed-v4, got %s -> %s", v4Item.address, v4Item.list)
 	}
-	if addrs["10.0.0.2"] != "allowed-v4" {
-		t.Errorf("expected 10.0.0.2 -> allowed-v4, got %s", addrs["10.0.0.2"])
+	if v4Item.mask != 24 {
+		t.Errorf("expected v4 mask 24, got %d", v4Item.mask)
 	}
-	if addrs["2001:db8::1"] != "allowed-v6" {
-		t.Errorf("expected 2001:db8::1 -> allowed-v6, got %s", addrs["2001:db8::1"])
+	if v6Item.address != "2001:db8::1" || v6Item.list != "allowed-v6" {
+		t.Errorf("expected 2001:db8::1 -> allowed-v6, got %s -> %s", v6Item.address, v6Item.list)
+	}
+	if v6Item.mask != 64 {
+		t.Errorf("expected v6 mask 64, got %d", v6Item.mask)
+	}
+
+	// Verify response was written back.
+	if w.Msg == nil {
+		t.Fatal("expected response to be written back to the client")
+	}
+}
+
+// TestServeDNSDomainMatchNoWriters — domain matches but no writers configured;
+// verify forward is called and response is returned but queue stays empty.
+func TestServeDNSDomainMatchNoWriters(t *testing.T) {
+	ctx := context.Background()
+	var exchanged bool
+	m := &Mikrotik{
+		mask4: 24,
+		mask6: 64,
+		domainList: &testDomainMatcher{
+			matchFunc: func(domain string) bool { return true },
+		},
+		// No writers.
+		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
+			exchanged = true
+			resp := new(dns.Msg)
+			resp.SetReply(r)
+			resp.Answer = append(resp.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP("10.0.0.5"),
+			})
+			return resp, nil
+		},
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeA)
+
+	w := &testResponseWriter{}
+	rcode, err := m.ServeDNS(ctx, w, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rcode != dns.RcodeSuccess {
+		t.Fatalf("expected RcodeSuccess, got %d", rcode)
+	}
+	if !exchanged {
+		t.Error("expected exchange to be called")
+	}
+	if w.Msg == nil {
+		t.Fatal("expected response to be written back")
+	}
+}
+
+// TestServeDNSNoDomainMatch — domain list is nil; verify query passes through
+// to Next without exchange.
+func TestServeDNSNoDomainMatch(t *testing.T) {
+	ctx := context.Background()
+	var nextCalled bool
+	m := &Mikrotik{
+		// domainList is nil — no matching.
+		Next: plugin.HandlerFunc(func(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+			nextCalled = true
+			resp := new(dns.Msg)
+			resp.SetReply(r)
+			resp.Answer = append(resp.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: "other.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP("10.0.0.99"),
+			})
+			return dns.RcodeSuccess, w.WriteMsg(resp)
+		}),
+		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
+			t.Error("exchange should not be called when domainList is nil")
+			return nil, nil
+		},
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("other.com.", dns.TypeA)
+
+	w := &testResponseWriter{}
+	rcode, err := m.ServeDNS(ctx, w, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rcode != dns.RcodeSuccess {
+		t.Fatalf("expected RcodeSuccess, got %d", rcode)
+	}
+	if !nextCalled {
+		t.Error("expected Next to be called")
+	}
+	if w.Msg == nil || len(w.Msg.Answer) == 0 {
+		t.Fatal("expected response from Next to be written back")
+	}
+	if w.Msg.Answer[0].Header().Name != "other.com." {
+		t.Errorf("expected other.com. answer, got %s", w.Msg.Answer[0].Header().Name)
+	}
+}
+
+// TestServeDNSDomainMatchForwardError — domain matches but exchange returns
+// an error; verify SERVFAIL with no enqueue.
+func TestServeDNSDomainMatchForwardError(t *testing.T) {
+	ctx := context.Background()
+	m := &Mikrotik{
+		domainList: &testDomainMatcher{
+			matchFunc: func(domain string) bool { return true },
+		},
+		writers: []*deviceWriter{
+			{
+				cfg:   DeviceConfig{Address: "10.0.0.1:8728", AddressList4: "allowed-v4"},
+				queue: make(chan writeItem, 10),
+				dedup: sync.Map{},
+			},
+		},
+		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
+			return nil, dns.ErrRcode
+		},
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeA)
+
+	w := &testResponseWriter{}
+	rcode, err := m.ServeDNS(ctx, w, req)
+	if err == nil {
+		t.Fatal("expected an error from exchange")
+	}
+	if rcode != dns.RcodeServerFailure {
+		t.Fatalf("expected RcodeServerFailure, got %d", rcode)
+	}
+
+	// Queue should be empty.
+	select {
+	case item := <-m.writers[0].queue:
+		t.Fatalf("expected empty queue, got item: %+v", item)
+	default:
+	}
+}
+
+// TestServeDNSDomainMatchNonIP — domain matches but response has only non-IP
+// records (CNAME, TXT); verify queue stays empty.
+func TestServeDNSDomainMatchNonIP(t *testing.T) {
+	ctx := context.Background()
+	m := &Mikrotik{
+		domainList: &testDomainMatcher{
+			matchFunc: func(domain string) bool { return true },
+		},
+		writers: []*deviceWriter{
+			{
+				cfg:   DeviceConfig{Address: "10.0.0.1:8728", AddressList4: "allowed-v4"},
+				queue: make(chan writeItem, 10),
+				dedup: sync.Map{},
+			},
+		},
+		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
+			resp := new(dns.Msg)
+			resp.SetReply(r)
+			resp.Answer = append(resp.Answer,
+				&dns.CNAME{
+					Hdr:    dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+					Target: "target.example.com.",
+				},
+				&dns.TXT{
+					Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
+					Txt: []string{"v=spf1 include:_spf.example.com"},
+				},
+			)
+			return resp, nil
+		},
+	}
+
+	req := new(dns.Msg)
+	req.SetQuestion("example.com.", dns.TypeA)
+
+	w := &testResponseWriter{}
+	rcode, err := m.ServeDNS(ctx, w, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rcode != dns.RcodeSuccess {
+		t.Fatalf("expected RcodeSuccess, got %d", rcode)
+	}
+
+	// Queue should be empty (no A/AAAA in answer).
+	select {
+	case item := <-m.writers[0].queue:
+		t.Fatalf("expected empty queue for non-IP records, got item: %+v", item)
+	default:
+	}
+
+	if w.Msg == nil {
+		t.Fatal("expected response to be written back even with non-IP records")
 	}
 }

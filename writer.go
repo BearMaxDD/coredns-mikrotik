@@ -19,7 +19,7 @@ func (dw *deviceWriter) processItem(ctx context.Context, item writeItem) {
 		writesCount.WithLabelValues(dw.cfg.Address, item.list, "error").Inc()
 		return
 	}
-	err := writeToRouterOS(ctx, dw.client, item.address, item.list, dw.cfg.Timeout, dw.cfg.Comment, 0)
+	err := writeToRouterOS(ctx, dw.client, item.address, item.list, dw.cfg.Timeout, dw.cfg.Comment, item.mask)
 	if err != nil {
 		log.Printf("mikrotik: write %s/%s: %v", dw.cfg.Address, item.list, err)
 		dw.closeClient()

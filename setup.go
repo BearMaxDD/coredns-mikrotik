@@ -29,6 +29,7 @@ type DeviceConfig struct {
 type writeItem struct {
 	address string
 	list    string
+	mask    int
 }
 
 // deviceWriter manages address-list writes to a single MikroTik device.
@@ -49,10 +50,12 @@ type Mikrotik struct {
 	listForward string
 	mask4       int
 	mask6       int
+
+	// exchange, if set, is used by ServeDNS instead of ResolveWithForward.
+	// Used for testing; nil in production.
+	exchange func(ctx context.Context, r *dns.Msg) (*dns.Msg, error)
 }
 
-// Name implements plugin.Handler.
-func (m *Mikrotik) Name() string { return "mikrotik" }
 
 // ResolveWithForward forwards a DNS query to the configured upstream and returns the response.
 func (m *Mikrotik) ResolveWithForward(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
