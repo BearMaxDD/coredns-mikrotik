@@ -3,6 +3,7 @@ package mikrotik
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -54,10 +55,15 @@ type Mikrotik struct {
 	exchange func(ctx context.Context, r *dns.Msg) (*dns.Msg, error)
 }
 
-// resolveWithForward forwards a DNS query to the given upstream address and returns the response.
+// resolveWithForward forwards a DNS query to the given upstream address.
+// If the address lacks a port, ":53" is appended.
 func (m *Mikrotik) resolveWithForward(ctx context.Context, r *dns.Msg, addr string) (*dns.Msg, error) {
 	if m.exchange != nil {
 		return m.exchange(ctx, r)
+	}
+	// Normalize: add :53 if no port
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "53")
 	}
 	c := new(dns.Client)
 	r.RecursionDesired = true

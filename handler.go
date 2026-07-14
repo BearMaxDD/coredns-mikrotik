@@ -2,6 +2,7 @@ package mikrotik
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/miekg/dns"
@@ -30,15 +31,22 @@ func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 
 		resp, err := m.resolveWithForward(ctx, r, forwardAddr)
 		if err != nil {
-			return dns.RcodeServerFailure, err
+			return dns.RcodeServerFailure, fmt.Errorf("forward: %w", err)
 		}
 
 		if len(m.writers) > 0 && resp != nil {
 			m.enqueueAddresses(resp, route)
 		}
 
-		w.WriteMsg(resp)
-		return dns.RcodeSuccess, nil
+		if err := w.WriteMsg(resp); err != nil {
+			return dns.RcodeServerFailure, err
+		}
+		// 传递上游返回的实际 rcode
+		rcode := resp.Rcode
+		if rcode < 0 || rcode > 0xFF {
+			rcode = dns.RcodeServerFailure
+		}
+		return rcode, nil
 	}
 
 	// No route matched — pass through to next plugin.
