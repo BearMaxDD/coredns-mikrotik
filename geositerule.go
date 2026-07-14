@@ -11,17 +11,21 @@ import (
 )
 
 // GeoSiteMatcher implements RuleMatcher from a V2Ray geosite.dat file.
+// Domain types:
+//   - Plain:   substring match (e.g., "google" matches "google.com", "googleapis.com")
+//   - Full:    exact match only (e.g., "example.com" only matches "example.com", not "sub.example.com")
+//   - RootDomain: domain + all subdomains (e.g., "example.com" matches "sub.example.com")
+//   - Regex:   rejected at load (not supported)
 // Thread-safe: Match holds only a read lock.
 type GeoSiteMatcher struct {
-	mu      sync.RWMutex
-	domains map[string]struct{}
+	mu          sync.RWMutex
+	full        map[string]struct{}   // Full domains: exact match only
+	rootDomains map[string]struct{}   // RootDomain: parent walk
+	plain       []string              // Plain: substring match (lowercase)
 }
 
 var _ RuleMatcher = (*GeoSiteMatcher)(nil)
 
-// NewGeoSiteMatcher reads a geosite.dat file and extracts all domains matching
-// the given country code. Plain, Full, and RootDomain entries are stored for
-// suffix-based matching (parent-domain walk). Regex entries are skipped.
 func NewGeoSiteMatcher(path, code string) (*GeoSiteMatcher, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -45,53 +49,82 @@ func NewGeoSiteMatcher(path, code string) (*GeoSiteMatcher, error) {
 		return nil, fmt.Errorf("geosite: code %q not found in %s", code, path)
 	}
 
-	domains := make(map[string]struct{})
+	gm := &GeoSiteMatcher{
+		full:        make(map[string]struct{}),
+		rootDomains: make(map[string]struct{}),
+	}
+
 	for _, d := range matched.GetDomain() {
 		val := strings.TrimSpace(d.GetValue())
 		if val == "" {
 			continue
 		}
 		switch d.GetType() {
-		case geosite.Domain_Plain, geosite.Domain_Full:
+		case geosite.Domain_Full:
+			// exact match, FQDN
 			if !strings.HasSuffix(val, ".") {
 				val += "."
 			}
-			domains[strings.ToLower(val)] = struct{}{}
+			gm.full[strings.ToLower(val)] = struct{}{}
+
 		case geosite.Domain_RootDomain:
+			// domain + all subdomains
 			val = strings.TrimPrefix(val, ".")
 			if !strings.HasSuffix(val, ".") {
 				val += "."
 			}
-			val = strings.ToLower(val)
-			domains[val] = struct{}{}
+			gm.rootDomains[strings.ToLower(val)] = struct{}{}
+
+		case geosite.Domain_Plain:
+			// substring match (keyword)
+			gm.plain = append(gm.plain, strings.ToLower(val))
+
 		case geosite.Domain_Regex:
-			// skip regex for now
+			return nil, fmt.Errorf("geosite: regex domain type not supported: %q", val)
 		}
 	}
 
-	return &GeoSiteMatcher{domains: domains}, nil
+	return gm, nil
 }
 
-// Match checks if domain or any parent domain is in the stored domain set.
-// Input is normalized (lowercase, trailing dot added if missing).
+// Match checks the domain against stored geosite entries.
+// Order: full exact → root domain parent walk → plain substring.
 func (gm *GeoSiteMatcher) Match(domain string) bool {
 	if !strings.HasSuffix(domain, ".") {
 		domain += "."
 	}
 	domain = strings.ToLower(domain)
+	original := domain // 保留用于 Plain 匹配
+
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
+
+	// 1. Full: exact match only
+	if _, ok := gm.full[domain]; ok {
+		return true
+	}
+
+	// 2. RootDomain: parent walk on a copy
+	candidate := domain
 	for {
-		if _, ok := gm.domains[domain]; ok {
+		if _, ok := gm.rootDomains[candidate]; ok {
 			return true
 		}
-		dot := strings.IndexByte(domain, '.')
+		dot := strings.IndexByte(candidate, '.')
 		if dot < 0 {
-			return false
+			break
 		}
-		domain = domain[dot+1:]
+		candidate = candidate[dot+1:]
 	}
+
+	// 3. Plain: substring match against original domain
+	for _, keyword := range gm.plain {
+		if strings.Contains(original, keyword) {
+			return true
+		}
+	}
+
+	return false
 }
 
-// Close implements RuleMatcher. No-op for GeoSiteMatcher.
 func (gm *GeoSiteMatcher) Close() {}

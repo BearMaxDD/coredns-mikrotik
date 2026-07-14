@@ -57,7 +57,6 @@ func TestGeoSiteMatcherMatch(t *testing.T) {
 			{Type: geosite.Domain_Plain, Value: "example.com"},
 			{Type: geosite.Domain_RootDomain, Value: ".cn"},
 			{Type: geosite.Domain_Full, Value: "exact.test.com"},
-			{Type: geosite.Domain_Regex, Value: "skip\\.me"},
 		},
 	})
 
@@ -77,11 +76,10 @@ func TestGeoSiteMatcherMatch(t *testing.T) {
 		{"rootdomain match", "something.cn.", true},
 		{"rootdomain subdomain", "a.b.cn.", true},
 		{"full exact", "exact.test.com.", true},
-		{"full subdomain", "sub.exact.test.com.", true},
+		{"full subdomain", "sub.exact.test.com.", false},
 		{"no match", "other.net.", false},
 		{"no match wrong tld", "example.org.", false},
 		{"case insensitive", "EXAMPLE.COM.", true},
-		{"regex skipped", "skip.me.", false},
 	}
 
 	for _, tc := range tests {
