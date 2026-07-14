@@ -46,25 +46,25 @@ type deviceWriter struct {
 type Mikrotik struct {
 	Next        plugin.Handler
 	writers     []*deviceWriter
-	domainList  DomainMatcher
+	routes      []RouteRule
 	listForward string
-	mask4       int
-	mask6       int
 
-	// exchange, if set, is used by ServeDNS instead of ResolveWithForward.
+	// exchange, if set, is used by ServeDNS instead of resolveWithForward.
 	// Used for testing; nil in production.
 	exchange func(ctx context.Context, r *dns.Msg) (*dns.Msg, error)
 }
 
 
-// ResolveWithForward forwards a DNS query to the configured upstream and returns the response.
-func (m *Mikrotik) ResolveWithForward(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
+// resolveWithForward forwards a DNS query to the given upstream address and returns the response.
+func (m *Mikrotik) resolveWithForward(ctx context.Context, r *dns.Msg, addr string) (*dns.Msg, error) {
+	if m.exchange != nil {
+		return m.exchange(ctx, r)
+	}
 	c := new(dns.Client)
 	r.RecursionDesired = true
-	resp, _, err := c.ExchangeContext(ctx, r, m.listForward)
+	resp, _, err := c.ExchangeContext(ctx, r, addr)
 	return resp, err
 }
-
 func init() {
 	plugin.Register("mikrotik", setup)
 }
@@ -98,6 +98,8 @@ func setup(c *caddy.Controller) error {
 // parseConfig parses the mikrotik configuration block from Corefile.
 func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	m := &Mikrotik{}
+	var routeMask4, routeMask6 int
+	var routeForward string
 	var current *deviceWriter
 	seenDevice := false
 	var domainsFilePath string
@@ -133,7 +135,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				if err != nil || n < 0 || n > 32 {
 					return nil, fmt.Errorf("invalid mask4 %q: must be 0-32", args[0])
 				}
-				m.mask4 = n
+				routeMask4 = n
 
 			case "mask6":
 				args := c.RemainingArgs()
@@ -144,14 +146,16 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				if err != nil || n < 0 || n > 128 {
 					return nil, fmt.Errorf("invalid mask6 %q: must be 0-128", args[0])
 				}
-				m.mask6 = n
+				routeMask6 = n
 
 			case "forward":
 				args := c.RemainingArgs()
 				if len(args) != 1 {
 					return nil, c.ArgErr()
 				}
+				routeForward = args[0]
 				m.listForward = args[0]
+
 
 			case "device":
 				args := c.RemainingArgs()
@@ -229,7 +233,12 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading domains-file: %v", err)
 	}
-	m.domainList = dl
+	m.routes = append(m.routes, RouteRule{
+		Matcher: dl,
+		Forward: routeForward,
+		Mask4:   routeMask4,
+		Mask6:   routeMask6,
+	})
 
 	return m, nil
 }

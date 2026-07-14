@@ -2,7 +2,6 @@ package mikrotik
 
 import (
 	"context"
-	"net"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/miekg/dns"
@@ -11,23 +10,25 @@ import (
 // Name implements plugin.Handler.
 func (m *Mikrotik) Name() string { return "mikrotik" }
 
-// ServeDNS intercepts DNS queries. If a domain list is configured and the
-// query domain matches, it resolves via the forwarder, extracts A/AAAA
-// addresses into the address-list queue, and returns the response. If the
-// domain does not match (or no domain list is configured), the query is
-// passed through to the next plugin.
+// ServeDNS intercepts DNS queries. It iterates over routes and on the first
+// matching route resolves via the forwarder, extracts A/AAAA addresses into
+// the address-list queue, and returns the response. If no route matches, the
+// query is passed through to the next plugin.
 func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	qname := r.Question[0].Name
 
-	// Domain-list match path.
-	if m.domainList != nil && m.domainList.Match(qname) {
-		var resp *dns.Msg
-		var err error
-		if m.exchange != nil {
-			resp, err = m.exchange(ctx, r)
-		} else {
-			resp, err = m.ResolveWithForward(ctx, r)
+	for _, route := range m.routes {
+		if route.Matcher == nil || !route.Matcher.Match(qname) {
+			continue
 		}
+
+		// Route matched! Determine forward address.
+		forwardAddr := route.Forward
+		if forwardAddr == "" {
+			forwardAddr = m.listForward
+		}
+
+		resp, err := m.resolveWithForward(ctx, r, forwardAddr)
 		if err != nil {
 			return dns.RcodeServerFailure, err
 		}
@@ -37,26 +38,35 @@ func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 			for _, ans := range resp.Answer {
 				var addr string
 				var mask int
+				var list string
 				switch rr := ans.(type) {
 				case *dns.A:
 					addr = rr.A.String()
-					mask = m.mask4
+					mask = route.Mask4
+					if mask < 0 {
+						mask = 0
+					}
+					list = route.AddressList4
+					if list == "" && len(m.writers) > 0 {
+						list = m.writers[0].cfg.AddressList4
+					}
 				case *dns.AAAA:
 					addr = rr.AAAA.String()
-					mask = m.mask6
+					mask = route.Mask6
+					if mask < 0 {
+						mask = 0
+					}
+					list = route.AddressList6
+					if list == "" && len(m.writers) > 0 {
+						list = m.writers[0].cfg.AddressList6
+					}
 				default:
 					continue
 				}
+				if list == "" {
+					continue
+				}
 				for _, dw := range m.writers {
-					list := ""
-					if ip := net.ParseIP(addr); ip != nil && ip.To4() != nil {
-						list = dw.cfg.AddressList4
-					} else {
-						list = dw.cfg.AddressList6
-					}
-					if list == "" {
-						continue
-					}
 					select {
 					case dw.queue <- writeItem{address: addr, list: list, mask: mask}:
 					default:
@@ -70,7 +80,7 @@ func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 		return dns.RcodeSuccess, nil
 	}
 
-	// Non-matching path: pass through to the next plugin.
+	// No route matched — pass through to next plugin.
 	return m.Next.ServeDNS(ctx, w, r)
 }
 

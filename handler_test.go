@@ -29,7 +29,7 @@ func (w *testResponseWriter) LocalAddr() net.Addr {
 	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 53}
 }
 
-// testDomainMatcher implements DomainMatcher for testing.
+// testDomainMatcher implements RuleMatcher for testing.
 type testDomainMatcher struct {
 	matchFunc func(domain string) bool
 }
@@ -39,15 +39,19 @@ func (m *testDomainMatcher) Match(domain string) bool {
 }
 func (m *testDomainMatcher) Close() {}
 
-// TestServeDNSDomainMatchExtract — domain list matches; mock exchange returns
+// TestServeDNSDomainMatchExtract — first route matches; mock exchange returns
 // A and AAAA records; verify queue items include the correct mask.
 func TestServeDNSDomainMatchExtract(t *testing.T) {
 	ctx := context.Background()
 	m := &Mikrotik{
-		mask4: 24,
-		mask6: 64,
-		domainList: &testDomainMatcher{
-			matchFunc: func(domain string) bool { return domain == "example.com." },
+		routes: []RouteRule{
+			{
+				Matcher: &testDomainMatcher{
+					matchFunc: func(domain string) bool { return domain == "example.com." },
+				},
+				Mask4: 24,
+				Mask6: 64,
+			},
 		},
 		writers: []*deviceWriter{
 			{
@@ -130,16 +134,18 @@ done:
 	}
 }
 
-// TestServeDNSDomainMatchNoWriters — domain matches but no writers configured;
+// TestServeDNSDomainMatchNoWriters — route matches but no writers configured;
 // verify forward is called and response is returned but queue stays empty.
 func TestServeDNSDomainMatchNoWriters(t *testing.T) {
 	ctx := context.Background()
 	var exchanged bool
 	m := &Mikrotik{
-		mask4: 24,
-		mask6: 64,
-		domainList: &testDomainMatcher{
-			matchFunc: func(domain string) bool { return true },
+		routes: []RouteRule{
+			{
+				Matcher: &testDomainMatcher{
+					matchFunc: func(domain string) bool { return true },
+				},
+			},
 		},
 		// No writers.
 		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
@@ -173,13 +179,13 @@ func TestServeDNSDomainMatchNoWriters(t *testing.T) {
 	}
 }
 
-// TestServeDNSNoDomainMatch — domain list is nil; verify query passes through
+// TestServeDNSNoDomainMatch — no routes configured; verify query passes through
 // to Next without exchange.
 func TestServeDNSNoDomainMatch(t *testing.T) {
 	ctx := context.Background()
 	var nextCalled bool
 	m := &Mikrotik{
-		// domainList is nil — no matching.
+		// No routes — no matching.
 		Next: plugin.HandlerFunc(func(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 			nextCalled = true
 			resp := new(dns.Msg)
@@ -191,7 +197,7 @@ func TestServeDNSNoDomainMatch(t *testing.T) {
 			return dns.RcodeSuccess, w.WriteMsg(resp)
 		}),
 		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
-			t.Error("exchange should not be called when domainList is nil")
+			t.Error("exchange should not be called when no routes configured")
 			return nil, nil
 		},
 	}
@@ -218,13 +224,17 @@ func TestServeDNSNoDomainMatch(t *testing.T) {
 	}
 }
 
-// TestServeDNSDomainMatchForwardError — domain matches but exchange returns
+// TestServeDNSDomainMatchForwardError — route matches but exchange returns
 // an error; verify SERVFAIL with no enqueue.
 func TestServeDNSDomainMatchForwardError(t *testing.T) {
 	ctx := context.Background()
 	m := &Mikrotik{
-		domainList: &testDomainMatcher{
-			matchFunc: func(domain string) bool { return true },
+		routes: []RouteRule{
+			{
+				Matcher: &testDomainMatcher{
+					matchFunc: func(domain string) bool { return true },
+				},
+			},
 		},
 		writers: []*deviceWriter{
 			{
@@ -258,13 +268,17 @@ func TestServeDNSDomainMatchForwardError(t *testing.T) {
 	}
 }
 
-// TestServeDNSDomainMatchNonIP — domain matches but response has only non-IP
+// TestServeDNSDomainMatchNonIP — route matches but response has only non-IP
 // records (CNAME, TXT); verify queue stays empty.
 func TestServeDNSDomainMatchNonIP(t *testing.T) {
 	ctx := context.Background()
 	m := &Mikrotik{
-		domainList: &testDomainMatcher{
-			matchFunc: func(domain string) bool { return true },
+		routes: []RouteRule{
+			{
+				Matcher: &testDomainMatcher{
+					matchFunc: func(domain string) bool { return true },
+				},
+			},
 		},
 		writers: []*deviceWriter{
 			{

@@ -53,17 +53,29 @@ func TestParseConfig(t *testing.T) {
 	if w.cfg.Comment != "production" {
 		t.Errorf("Comment: want %q, got %q", "production", w.cfg.Comment)
 	}
-	if m.mask4 != 24 {
-		t.Errorf("mask4: want 24, got %d", m.mask4)
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
 	}
-	if m.mask6 != 64 {
-		t.Errorf("mask6: want 64, got %d", m.mask6)
+	if m.routes[0].Matcher == nil {
+		t.Fatal("expected non-nil Matcher")
+	}
+	if m.routes[0].AddressList4 != "" {
+		t.Errorf("AddressList4: want empty, got %q", m.routes[0].AddressList4)
+	}
+	if m.routes[0].AddressList6 != "" {
+		t.Errorf("AddressList6: want empty, got %q", m.routes[0].AddressList6)
+	}
+	if m.routes[0].Mask4 != 24 {
+		t.Errorf("Mask4: want 24, got %d", m.routes[0].Mask4)
+	}
+	if m.routes[0].Mask6 != 64 {
+		t.Errorf("Mask6: want 64, got %d", m.routes[0].Mask6)
+	}
+	if m.routes[0].Forward != "8.8.8.8:53" {
+		t.Errorf("Forward: want %q, got %q", "8.8.8.8:53", m.routes[0].Forward)
 	}
 	if m.listForward != "8.8.8.8:53" {
 		t.Errorf("listForward: want %q, got %q", "8.8.8.8:53", m.listForward)
-	}
-	if m.domainList == nil {
-		t.Fatal("expected non-nil domainList")
 	}
 }
 
@@ -112,11 +124,17 @@ func TestParseConfigNoDevice(t *testing.T) {
 	if len(m.writers) != 0 {
 		t.Fatalf("expected 0 writers, got %d", len(m.writers))
 	}
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
+	}
+	if m.routes[0].Matcher == nil {
+		t.Fatal("expected non-nil Matcher")
+	}
+	if m.routes[0].Forward != "1.1.1.1:53" {
+		t.Errorf("Forward: want %q, got %q", "1.1.1.1:53", m.routes[0].Forward)
+	}
 	if m.listForward != "1.1.1.1:53" {
 		t.Errorf("listForward: want %q, got %q", "1.1.1.1:53", m.listForward)
-	}
-	if m.domainList == nil {
-		t.Fatal("expected non-nil domainList")
 	}
 }
 
@@ -233,8 +251,11 @@ func TestParseConfigReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if m.domainList == nil {
-		t.Fatal("expected non-nil domainList")
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
+	}
+	if m.routes[0].Matcher == nil {
+		t.Fatal("expected non-nil Matcher")
 	}
 }
 
@@ -249,11 +270,17 @@ func TestParseConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if m.mask4 != 0 {
-		t.Errorf("mask4: want 0, got %d", m.mask4)
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
 	}
-	if m.mask6 != 0 {
-		t.Errorf("mask6: want 0, got %d", m.mask6)
+	if m.routes[0].Mask4 != 0 {
+		t.Errorf("Mask4: want 0, got %d", m.routes[0].Mask4)
+	}
+	if m.routes[0].Mask6 != 0 {
+		t.Errorf("Mask6: want 0, got %d", m.routes[0].Mask6)
+	}
+	if m.routes[0].Forward != "" {
+		t.Errorf("Forward: want empty, got %q", m.routes[0].Forward)
 	}
 	if m.listForward != "" {
 		t.Errorf("listForward: want empty, got %q", m.listForward)
@@ -279,6 +306,12 @@ func TestParseConfigForwardAndDevice(t *testing.T) {
 	if len(m.writers) != 1 {
 		t.Fatalf("expected 1 writer, got %d", len(m.writers))
 	}
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
+	}
+	if m.routes[0].Forward != "8.8.8.8:53" {
+		t.Errorf("Forward: want %q, got %q", "8.8.8.8:53", m.routes[0].Forward)
+	}
 }
 
 func TestParseConfigDomainsFileBeforeDevice(t *testing.T) {
@@ -293,8 +326,11 @@ func TestParseConfigDomainsFileBeforeDevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if m.domainList == nil {
-		t.Fatal("expected non-nil domainList")
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
+	}
+	if m.routes[0].Matcher == nil {
+		t.Fatal("expected non-nil Matcher")
 	}
 	if len(m.writers) != 1 {
 		t.Fatalf("expected 1 writer, got %d", len(m.writers))
@@ -312,8 +348,11 @@ func TestParseConfigDeviceBeforeDomainsFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if m.domainList == nil {
-		t.Fatal("expected non-nil domainList")
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
+	}
+	if m.routes[0].Matcher == nil {
+		t.Fatal("expected non-nil Matcher")
 	}
 	if len(m.writers) != 1 {
 		t.Fatalf("expected 1 writer, got %d", len(m.writers))
@@ -346,11 +385,14 @@ func TestParseConfigMask4Zero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if m.mask4 != 0 {
-		t.Errorf("mask4: want 0, got %d", m.mask4)
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
 	}
-	if m.mask6 != 0 {
-		t.Errorf("mask6: want 0, got %d", m.mask6)
+	if m.routes[0].Mask4 != 0 {
+		t.Errorf("Mask4: want 0, got %d", m.routes[0].Mask4)
+	}
+	if m.routes[0].Mask6 != 0 {
+		t.Errorf("Mask6: want 0, got %d", m.routes[0].Mask6)
 	}
 }
 
@@ -365,8 +407,11 @@ func TestParseConfigMask4Max(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if m.mask4 != 32 {
-		t.Errorf("mask4: want 32, got %d", m.mask4)
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
+	}
+	if m.routes[0].Mask4 != 32 {
+		t.Errorf("Mask4: want 32, got %d", m.routes[0].Mask4)
 	}
 }
 
@@ -381,8 +426,11 @@ func TestParseConfigMask6Max(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if m.mask6 != 128 {
-		t.Errorf("mask6: want 128, got %d", m.mask6)
+	if len(m.routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(m.routes))
+	}
+	if m.routes[0].Mask6 != 128 {
+		t.Errorf("Mask6: want 128, got %d", m.routes[0].Mask6)
 	}
 }
 
