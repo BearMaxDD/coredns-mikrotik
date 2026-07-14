@@ -65,21 +65,17 @@ func setup(c *caddy.Controller) error {
 		return plugin.Error("mikrotik", err)
 	}
 
-	// Start worker loops for each device writer.
 	for _, w := range m.writers {
-		go w.run()
-	}
-
-	c.OnStartup(func() error {
-		return nil
-	})
-
-	c.OnShutdown(func() error {
-		for _, w := range m.writers {
+		w := w
+		c.OnStartup(func() error {
+			go w.run()
+			return nil
+		})
+		c.OnShutdown(func() error {
 			close(w.stop)
-		}
-		return nil
-	})
+			return nil
+		})
+	}
 
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
 		m.Next = next
