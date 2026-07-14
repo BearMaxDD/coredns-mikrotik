@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"time"
 
 	ros "github.com/go-routeros/routeros/v3"
@@ -38,10 +39,37 @@ func cmdPathForAddr(addr string) string {
 	}
 	return "/ipv6/firewall/address-list"
 }
+// applyMask returns addr with the given prefix length applied.
+// mask <= 0 returns addr unchanged. mask values exceeding the IP's bit length
+// are clamped. If addr cannot be parsed, it is returned unchanged.
+func applyMask(addr string, mask int) string {
+	if mask <= 0 {
+		return addr
+	}
+	ip, err := netip.ParseAddr(addr)
+	if err != nil {
+		return addr
+	}
+	if ip.Is4() {
+		if mask > 32 {
+			mask = 32
+		}
+	} else {
+		if mask > 128 {
+			mask = 128
+		}
+	}
+	p, err := ip.Prefix(mask)
+	if err != nil {
+		return addr
+	}
+	return p.String()
+}
+
 
 // writeToRouterOS idempotently writes an address-list entry. It queries for
 // an existing entry matching (address, list) and either updates or creates it.
-func writeToRouterOS(ctx context.Context, client rosClient, addr, list string, timeout time.Duration, comment string) error {
+func writeToRouterOS(ctx context.Context, client rosClient, addr, list string, timeout time.Duration, comment string, mask int) error {
 	cmdPath := cmdPathForAddr(addr)
 	wantTimeout := timeoutToRouterOSString(timeout)
 
@@ -71,9 +99,10 @@ func writeToRouterOS(ctx context.Context, client rosClient, addr, list string, t
 	}
 
 	// No existing entry – add.
+	masked := applyMask(addr, mask)
 	addArgs := []string{
 		cmdPath + "/add",
-		"=address=" + addr,
+		"=address=" + masked,
 		"=list=" + list,
 		"=timeout=" + wantTimeout,
 	}

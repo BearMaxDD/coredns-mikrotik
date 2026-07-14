@@ -164,3 +164,45 @@ func TestDomainListReloadInterval(t *testing.T) {
 		t.Error("expected no match for first.com after file replaced")
 	}
 }
+
+func TestDomainListSubdomainMatch(t *testing.T) {
+	content := "example.com\nblocked.test\n"
+	path := writeDomainFile(t, content)
+
+	dl, err := NewDomainList(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dl.Close()
+
+	t.Run("subdomain matches parent", func(t *testing.T) {
+		if !dl.Match("sub.example.com") {
+			t.Error("expected match for sub.example.com")
+		}
+	})
+
+	t.Run("deep subdomain matches", func(t *testing.T) {
+		if !dl.Match("a.b.c.sub.example.com") {
+			t.Error("expected match for deep subdomain")
+		}
+	})
+}
+
+func TestDomainListLabelBoundary(t *testing.T) {
+	content := "example.com\n"
+	path := writeDomainFile(t, content)
+
+	dl, err := NewDomainList(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dl.Close()
+
+	// "badexample.com" should NOT match "example.com"
+	if dl.Match("badexample.com") {
+		t.Error("expected no match for badexample.com (label boundary)")
+	}
+	if dl.Match("notexample.com") {
+		t.Error("expected no match for notexample.com (label boundary)")
+	}
+}

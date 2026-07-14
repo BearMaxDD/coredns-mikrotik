@@ -101,11 +101,39 @@ func TestCmdPathForAddr(t *testing.T) {
 	}
 }
 
+func TestApplyMask(t *testing.T) {
+	tests := []struct {
+		name string
+		addr string
+		mask int
+		want string
+	}{
+		{"ipv4_24", "10.0.0.5", 24, "10.0.0.0/24"},
+		{"ipv4_32", "10.0.0.5", 32, "10.0.0.5/32"},
+		{"ipv4_mask0", "10.0.0.5", 0, "10.0.0.5"},
+		{"ipv4_negative", "10.0.0.5", -1, "10.0.0.5"},
+		{"ipv6_64", "2001:db8::1", 64, "2001:db8::/64"},
+		{"ipv6_128", "2001:db8::1", 128, "2001:db8::1/128"},
+		{"ipv6_mask0", "2001:db8::1", 0, "2001:db8::1"},
+		{"ipv4_mask_overflow", "10.0.0.5", 48, "10.0.0.5/32"},
+		{"ipv6_mask_overflow", "2001:db8::1", 192, "2001:db8::1/128"},
+		{"invalid_addr", "not-an-ip", 24, "not-an-ip"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := applyMask(tc.addr, tc.mask)
+			if got != tc.want {
+				t.Errorf("applyMask(%q, %d) = %q; want %q", tc.addr, tc.mask, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWriteToRouterOS_Add(t *testing.T) {
 	fc := &fakeClient{}
 	fc.setReplies([]string{""}) // print returns no entries
 
-	err := writeToRouterOS(context.Background(), fc, "10.0.0.5", "allowed", 24*time.Hour, "")
+	err := writeToRouterOS(context.Background(), fc, "10.0.0.5", "allowed", 24*time.Hour, "", 24)
 	if err != nil {
 		t.Fatalf("writeToRouterOS returned error: %v", err)
 	}
@@ -123,7 +151,30 @@ func TestWriteToRouterOS_Add(t *testing.T) {
 		t.Errorf("print call args = %v; want %v", fc.history[0], wantPrint)
 	}
 
-	// Second call: add
+	// Second call: add — note the masked address
+	wantAdd := []string{"/ip/firewall/address-list/add", "=address=10.0.0.0/24", "=list=allowed", "=timeout=24:00:00"}
+	if !slicesEqual(fc.history[1], wantAdd) {
+		t.Errorf("add call args = %v; want %v", fc.history[1], wantAdd)
+	}
+}
+
+func TestWriteToRouterOS_AddNoMask(t *testing.T) {
+	fc := &fakeClient{}
+	fc.setReplies([]string{""}) // print returns no entries
+
+	err := writeToRouterOS(context.Background(), fc, "10.0.0.5", "allowed", 24*time.Hour, "", 0)
+	if err != nil {
+		t.Fatalf("writeToRouterOS returned error: %v", err)
+	}
+
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+
+	if len(fc.history) != 2 {
+		t.Fatalf("expected 2 client calls, got %d", len(fc.history))
+	}
+
+	// Second call: add — no mask applied, original address
 	wantAdd := []string{"/ip/firewall/address-list/add", "=address=10.0.0.5", "=list=allowed", "=timeout=24:00:00"}
 	if !slicesEqual(fc.history[1], wantAdd) {
 		t.Errorf("add call args = %v; want %v", fc.history[1], wantAdd)
@@ -134,7 +185,7 @@ func TestWriteToRouterOS_UpdateExisting(t *testing.T) {
 	fc := &fakeClient{}
 	fc.setReplies([]string{".id=*1"}) // print returns one existing entry
 
-	err := writeToRouterOS(context.Background(), fc, "10.0.0.5", "allowed", 24*time.Hour, "")
+	err := writeToRouterOS(context.Background(), fc, "10.0.0.5", "allowed", 24*time.Hour, "", 24)
 	if err != nil {
 		t.Fatalf("writeToRouterOS returned error: %v", err)
 	}
@@ -152,7 +203,7 @@ func TestWriteToRouterOS_UpdateExisting(t *testing.T) {
 		t.Errorf("print call args = %v; want %v", fc.history[0], wantPrint)
 	}
 
-	// Second call: set
+	// Second call: set — address from RouterOS print output, not affected by mask
 	wantSet := []string{"/ip/firewall/address-list/set", "=.id=*1", "=timeout=24:00:00"}
 	if !slicesEqual(fc.history[1], wantSet) {
 		t.Errorf("set call args = %v; want %v", fc.history[1], wantSet)
