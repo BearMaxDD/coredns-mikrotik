@@ -111,7 +111,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 						Password: args[2],
 						Timeout:  24 * time.Hour,
 					},
-					queue: make(chan writeItem, 256),
+				queue: make(chan writeItem, 1024),
 					stop:  make(chan struct{}),
 				}
 				m.writers = append(m.writers, current)
