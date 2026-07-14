@@ -86,8 +86,8 @@ func TestParseConfigNoDevice(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing device")
 	}
-	if err.Error() != "mikrotik: no device configured" {
-		t.Errorf("error message: want %q, got %q", "mikrotik: no device configured", err.Error())
+	if err.Error() != "no device configured" {
+		t.Errorf("error message: want %q, got %q", "no device configured", err.Error())
 	}
 }
 

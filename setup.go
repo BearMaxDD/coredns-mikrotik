@@ -101,7 +101,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 					return nil, c.ArgErr()
 				}
 				if !seenDevice && directiveBeforeDevice {
-					return nil, fmt.Errorf("mikrotik: directives must follow device declarations")
+				return nil, fmt.Errorf("directives must follow device declarations")
 				}
 				seenDevice = true
 				current = &deviceWriter{
@@ -149,7 +149,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				}
 				d, err := time.ParseDuration(args[0])
 				if err != nil {
-					return nil, fmt.Errorf("mikrotik: invalid timeout %q: %v", args[0], err)
+				return nil, fmt.Errorf("invalid timeout %q: %v", args[0], err)
 				}
 				current.cfg.Timeout = d
 
@@ -171,7 +171,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	}
 
 	if !seenDevice {
-		return nil, fmt.Errorf("mikrotik: no device configured")
+		return nil, fmt.Errorf("no device configured")
 	}
 
 	return m, nil
