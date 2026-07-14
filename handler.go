@@ -52,8 +52,8 @@ func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 			}
 			select {
 			case dw.queue <- writeItem{address: addr, list: list}:
-			default:
-				// queue full - will be counted by metrics in Task 6
+		default:
+			queueDroppedCount.WithLabelValues(dw.cfg.Address).Inc()
 			}
 		}
 	}

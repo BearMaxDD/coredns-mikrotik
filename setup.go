@@ -1,8 +1,10 @@
 package mikrotik
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coredns/caddy"
@@ -34,6 +36,7 @@ type deviceWriter struct {
 	dedup  sync.Map
 	client rosClient
 	stop   chan struct{}
+	started atomic.Bool
 }
 
 // Mikrotik is the CoreDNS plugin that manages MikroTik address-list entries.
@@ -168,7 +171,20 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 }
 
 // run starts the worker loop for this device writer.
-// Currently a stub — full implementation in a later task.
-func (w *deviceWriter) run() {
-	<-w.stop
+func (dw *deviceWriter) run() {
+	dw.started.Store(true)
+	defer dw.started.Store(false)
+	defer dw.closeClient()
+
+	for {
+		select {
+		case <-dw.stop:
+			drainCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			dw.drain(drainCtx)
+			cancel()
+			return
+		case item := <-dw.queue:
+			dw.processItem(context.Background(), item)
+		}
+	}
 }
