@@ -3,7 +3,6 @@ package mikrotik
 import (
 	"context"
 	"net"
-	"sync"
 	"testing"
 
 	"github.com/coredns/coredns/plugin"
@@ -59,7 +58,6 @@ func TestServeDNSDomainMatchExtract(t *testing.T) {
 			{
 				cfg:   DeviceConfig{Address: "10.0.0.1:8728", AddressList4: "allowed-v4", AddressList6: "allowed-v6"},
 				queue: make(chan writeItem, 10),
-				dedup: sync.Map{},
 			},
 		},
 		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
@@ -242,7 +240,6 @@ func TestServeDNSDomainMatchForwardError(t *testing.T) {
 			{
 				cfg:   DeviceConfig{Address: "10.0.0.1:8728", AddressList4: "allowed-v4"},
 				queue: make(chan writeItem, 10),
-				dedup: sync.Map{},
 			},
 		},
 		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
@@ -286,7 +283,6 @@ func TestServeDNSDomainMatchNonIP(t *testing.T) {
 			{
 				cfg:   DeviceConfig{Address: "10.0.0.1:8728", AddressList4: "allowed-v4"},
 				queue: make(chan writeItem, 10),
-				dedup: sync.Map{},
 			},
 		},
 		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {

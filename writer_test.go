@@ -2,7 +2,6 @@ package mikrotik
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 )
@@ -14,11 +13,11 @@ func TestProcessItemWithFakeClient(t *testing.T) {
 	dw := &deviceWriter{
 		cfg:    DeviceConfig{Address: "10.0.0.1:8728", Timeout: time.Hour},
 		queue:  make(chan writeItem, 10),
-		dedup:  sync.Map{},
-		client: fc, // Pre-set to avoid real dial.
+		wcache: newWriteCache(0), // default TTL=1h
+		client: fc,               // Pre-set to avoid real dial.
 	}
 
-	dw.processItem(context.Background(), writeItem{address: "192.168.1.1", list: "allowed"})
+	dw.processItem(context.Background(), writeItem{address: "192.168.1.1", list: "allowed", mask: 0})
 
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
@@ -27,24 +26,25 @@ func TestProcessItemWithFakeClient(t *testing.T) {
 	}
 }
 
-// TestProcessItemDeduped verifies that a deduped item is skipped without
+// TestProcessItemCacheHit verifies that a cached item is skipped without
 // sending any RouterOS commands.
-func TestProcessItemDeduped(t *testing.T) {
+func TestProcessItemCacheHit(t *testing.T) {
 	fc := &fakeClient{}
 	dw := &deviceWriter{
 		cfg:    DeviceConfig{Address: "10.0.0.1:8728"},
 		queue:  make(chan writeItem, 10),
-		dedup:  sync.Map{},
+		wcache: newWriteCache(time.Hour),
 		client: fc,
 	}
 
-	dw.markDeduped("192.168.1.1", "allowed")
-	dw.processItem(context.Background(), writeItem{address: "192.168.1.1", list: "allowed"})
+	// Pre-set cache for the target (mask=0 means no mask, target = "192.168.1.1")
+	dw.wcache.Set(cacheKey("10.0.0.1:8728", "allowed", "192.168.1.1"))
+	dw.processItem(context.Background(), writeItem{address: "192.168.1.1", list: "allowed", mask: 0})
 
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	if len(fc.history) != 0 {
-		t.Errorf("expected no commands sent for deduped item, got %d", len(fc.history))
+		t.Errorf("expected no commands sent for cached item, got %d", len(fc.history))
 	}
 }
 
@@ -54,7 +54,6 @@ func TestWorkerStartStop(t *testing.T) {
 	dw := &deviceWriter{
 		cfg:   DeviceConfig{Address: "10.0.0.1:8728"},
 		queue: make(chan writeItem, 10),
-		dedup: sync.Map{},
 		stop:  make(chan struct{}),
 	}
 
@@ -80,7 +79,6 @@ func TestWorkerStartStop(t *testing.T) {
 		t.Fatal("run() did not return after stop was closed")
 	}
 
-	// Verify started flag is reset.
 	if dw.started.Load() {
 		t.Error("expected started to be false after run() returned")
 	}

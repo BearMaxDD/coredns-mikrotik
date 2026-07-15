@@ -93,7 +93,7 @@ mikrotik:github.com/netctrldns/coredns-mikrotik
 
 | Metric | 说明 |
 |---|---|
-| `coredns_mikrotik_writes_total{device,list,status}` | `written`/`dedup_hit`/`error` |
+| `coredns_mikrotik_writes_total{device,list,status}` | `written`/`cache_hit`/`backoff`/`error` |
 | `coredns_mikrotik_queue_dropped_total{device}` | 队列满丢弃数 |
 
 ## 生命周期

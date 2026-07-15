@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"testing"
 
 	"github.com/coredns/caddy"
@@ -208,7 +207,6 @@ func TestServeDNSMultiRoutePriority(t *testing.T) {
 			{
 				cfg:   DeviceConfig{Address: "10.0.0.1:8728"},
 				queue: make(chan writeItem, 10),
-				dedup: sync.Map{},
 			},
 		},
 		exchange: func(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
@@ -288,7 +286,6 @@ func TestEnqueueAddressesPerRoute(t *testing.T) {
 			{
 				cfg:   DeviceConfig{Address: "10.0.0.1:8728", AddressList4: "writer-v4", AddressList6: "writer-v6"},
 				queue: make(chan writeItem, 10),
-				dedup: sync.Map{},
 			},
 		},
 	}

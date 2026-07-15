@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,14 +32,15 @@ type writeItem struct {
 	mask    int
 }
 
-// deviceWriter manages address-list writes to a single MikroTik device.
 type deviceWriter struct {
-	cfg    DeviceConfig
-	queue  chan writeItem
-	dedup  sync.Map
-	client rosClient
-	stop   chan struct{}
-	started atomic.Bool
+	cfg         DeviceConfig
+	queue       chan writeItem
+	wcache      *writeCache
+	client      rosClient
+	stop        chan struct{}
+	started     atomic.Bool
+	nextAllowed time.Time
+	backoff     time.Duration
 }
 
 // Mikrotik is the CoreDNS plugin that manages MikroTik address-list entries.
@@ -130,6 +130,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	var current *deviceWriter
 	seenDevice := false
 	var reloadInterval time.Duration
+	var writeCacheTTL time.Duration
 	var geositeFilePath string
 	// Route-level defaults: routes that don't override use these.
 	defaultMask4 := 0
@@ -182,6 +183,20 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 					return nil, fmt.Errorf("invalid reload duration %q: %v", args[0], err)
 				}
 				reloadInterval = d
+
+			case "write-cache-ttl":
+				args := c.RemainingArgs()
+				if len(args) != 1 {
+					return nil, c.ArgErr()
+				}
+				d, err := time.ParseDuration(args[0])
+				if err != nil {
+					return nil, fmt.Errorf("invalid write-cache-ttl %q: %v", args[0], err)
+				}
+				if d <= 0 {
+					return nil, fmt.Errorf("write-cache-ttl must be positive, got %v", d)
+				}
+				writeCacheTTL = d
 
 			case "mask4":
 				args := c.RemainingArgs()
@@ -356,6 +371,12 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 		}
 	}
 
+	// Initialize write cache for all writers with effective TTL.
+	for _, dw := range m.writers {
+		ttl := effectiveWriteCacheTTL(writeCacheTTL, dw.cfg.Timeout)
+		dw.wcache = newWriteCache(ttl)
+	}
+
 	// Create all deferred routes in config order, resolving overrides
 	// against the final default values.
 	for _, rs := range routeSpecs {
@@ -411,6 +432,23 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	}
 
 	return m, nil
+}
+
+// effectiveWriteCacheTTL computes the effective write-cache TTL.
+// configured=0 → default: min(timeout/2, 1h). Non-zero → capped at timeout.
+func effectiveWriteCacheTTL(configured, timeout time.Duration) time.Duration {
+	if configured > 0 {
+		if timeout > 0 && configured > timeout {
+			return timeout
+		}
+		return configured
+	}
+	// Default
+	d := time.Hour
+	if timeout > 0 && timeout/2 < d {
+		d = timeout / 2
+	}
+	return d
 }
 
 // run starts the worker loop for this device writer.

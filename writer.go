@@ -3,48 +3,83 @@ package mikrotik
 import (
 	"context"
 	"log"
+	"time"
 
 	ros "github.com/go-routeros/routeros/v3"
 )
 
-// processItem handles a single address-list write request: dedup check,
-// ensure connection, write to RouterOS, mark dedup, and update metrics.
+// processItem handles a single address-list write request.
+// cache key uses masked target; writeToRouterOS gets raw address + mask.
 func (dw *deviceWriter) processItem(ctx context.Context, item writeItem) {
-	if dw.isDeduped(item.address, item.list) {
-		writesCount.WithLabelValues(dw.cfg.Address, item.list, "dedup_hit").Inc()
+	// 1. 失败退避检查
+	if !dw.nextAllowed.IsZero() && time.Now().Before(dw.nextAllowed) {
+		writesCount.WithLabelValues(dw.cfg.Address, item.list, "backoff").Inc()
 		return
 	}
+
+	// 2. Write-cache：用 mask 后的 target 做 key
+	target := applyMask(item.address, item.mask)
+	ck := cacheKey(dw.cfg.Address, item.list, target)
+	if dw.wcache != nil && dw.wcache.Has(ck) {
+		writesCount.WithLabelValues(dw.cfg.Address, item.list, "cache_hit").Inc()
+		return
+	}
+
+	// 3. 连接
 	if err := dw.ensureConnected(ctx); err != nil {
 		log.Printf("mikrotik: dial %s: %v", dw.cfg.Address, err)
 		writesCount.WithLabelValues(dw.cfg.Address, item.list, "error").Inc()
+		dw.backoffFailure()
 		return
 	}
+
+	// 4. 写入 RouterOS（传原始 item.address，writeToRouterOS 内部做 mask）
 	err := writeToRouterOS(ctx, dw.client, item.address, item.list, dw.cfg.Timeout, dw.cfg.Comment, item.mask)
 	if err != nil {
 		log.Printf("mikrotik: write %s/%s: %v", dw.cfg.Address, item.list, err)
 		dw.closeClient()
 		writesCount.WithLabelValues(dw.cfg.Address, item.list, "error").Inc()
+		dw.backoffFailure()
 		return
 	}
-	dw.markDeduped(item.address, item.list)
+
+	// 5. 成功：写入 cache + 重置退避
+	if dw.wcache != nil {
+		dw.wcache.Set(ck)
+	}
+	dw.backoffSuccess()
 	writesCount.WithLabelValues(dw.cfg.Address, item.list, "written").Inc()
 }
 
-// ensureConnected lazily dials a RouterOS connection if one is not already
-// established. Returns nil on success or if a client already exists.
+func (dw *deviceWriter) backoffFailure() {
+	if dw.backoff == 0 {
+		dw.backoff = time.Second
+	} else {
+		dw.backoff *= 2
+	}
+	if dw.backoff > time.Minute {
+		dw.backoff = time.Minute
+	}
+	dw.nextAllowed = time.Now().Add(dw.backoff)
+}
+
+func (dw *deviceWriter) backoffSuccess() {
+	dw.backoff = 0
+	dw.nextAllowed = time.Time{}
+}
+
 func (dw *deviceWriter) ensureConnected(ctx context.Context) error {
 	if dw.client != nil {
 		return nil
 	}
-	client, err := ros.DialContext(ctx, dw.cfg.Address, dw.cfg.Username, dw.cfg.Password)
+	c, err := ros.DialContext(ctx, dw.cfg.Address, dw.cfg.Username, dw.cfg.Password)
 	if err != nil {
 		return err
 	}
-	dw.client = client
+	dw.client = c
 	return nil
 }
 
-// closeClient closes the RouterOS client if non-nil and sets it to nil.
 func (dw *deviceWriter) closeClient() {
 	if dw.client != nil {
 		dw.client.Close()
@@ -52,8 +87,6 @@ func (dw *deviceWriter) closeClient() {
 	}
 }
 
-// drain consumes all pending queue items until the context expires or the
-// queue is empty.
 func (dw *deviceWriter) drain(ctx context.Context) {
 	for {
 		select {
