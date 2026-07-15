@@ -163,21 +163,21 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				}
 				m.dryRun = true
 			case "domains-file":
-				args := c.RemainingArgs()
-				if len(args) < 1 || len(args) > 2 {
+				if !c.NextArg() {
 					return nil, c.ArgErr()
 				}
+				path := c.Val()
 				noWrite := false
-				if len(args) == 2 {
-					if args[1] == "no-write" {
+				if c.NextArg() {
+					if c.Val() == "no-write" {
 						noWrite = true
 					} else {
-						return nil, c.Errf("domains-file: unknown option %q", args[1])
+						return nil, c.Errf("domains-file: unknown option %q", c.Val())
 					}
 				}
 				routeSpecs = append(routeSpecs, routeSpec{
 					kind:    "domains",
-					path:    args[0],
+					path:    path,
 					reload:  0,
 					ovMask4: -1,
 					ovMask6: -1,
