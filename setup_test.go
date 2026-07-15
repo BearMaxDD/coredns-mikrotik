@@ -520,3 +520,30 @@ func TestParseConfigDryRunWithArgs(t *testing.T) {
 		t.Fatal("expected error for dry-run with unexpected argument")
 	}
 }
+package mikrotik
+
+import (
+	"testing"
+	"github.com/coredns/caddy"
+)
+
+func TestParseConfigNoWrite(t *testing.T) {
+	path := writeDomainFile(t, "example.com\n")
+	m, err := parseConfig(caddy.NewTestController("dns",
+		"mikrotik {\n    address-list4 test-list\n    domains-file "+path+" no-write\n}"))
+	if err != nil { t.Fatal(err) }
+	if len(m.routes) != 1 { t.Fatalf("routes=%d", len(m.routes)) }
+	if m.routes[0].AddressList4 != "" {
+		t.Fatalf("expected empty AddressList4, got %q", m.routes[0].AddressList4)
+	}
+}
+
+func TestParseConfigNoWriteInheritsAddressList(t *testing.T) {
+	path := writeDomainFile(t, "example.com\n")
+	m, err := parseConfig(caddy.NewTestController("dns",
+		"mikrotik {\n    address-list4 test-list\n    domains-file "+path+"\n}"))
+	if err != nil { t.Fatal(err) }
+	if m.routes[0].AddressList4 != "test-list" {
+		t.Fatalf("expected test-list, got %q", m.routes[0].AddressList4)
+	}
+}

@@ -164,17 +164,25 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				m.dryRun = true
 			case "domains-file":
 				args := c.RemainingArgs()
-				if len(args) != 1 {
+				if len(args) < 1 || len(args) > 2 {
 					return nil, c.ArgErr()
+				}
+				noWrite := false
+				if len(args) == 2 {
+					if args[1] == "no-write" {
+						noWrite = true
+					} else {
+						return nil, c.Errf("domains-file: unknown option %q", args[1])
+					}
 				}
 				routeSpecs = append(routeSpecs, routeSpec{
 					kind:    "domains",
 					path:    args[0],
-					reload:  0, // 在 route 构建阶段用最终 reloadInterval
+					reload:  0,
 					ovMask4: -1,
 					ovMask6: -1,
+					noWrite: noWrite,
 				})
-
 			case "reload":
 				args := c.RemainingArgs()
 				if len(args) != 1 {
@@ -382,13 +390,17 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	// Create all deferred routes in config order, resolving overrides
 	// against the final default values.
 	for _, rs := range routeSpecs {
-		addrList4 := defaultAddrList4
-		if rs.ovAddrList4 != "" {
-			addrList4 = rs.ovAddrList4
-		}
-		addrList6 := defaultAddrList6
-		if rs.ovAddrList6 != "" {
-			addrList6 = rs.ovAddrList6
+		addrList4 := ""
+		addrList6 := ""
+		if !rs.noWrite {
+			addrList4 = defaultAddrList4
+			if rs.ovAddrList4 != "" {
+				addrList4 = rs.ovAddrList4
+			}
+			addrList6 = defaultAddrList6
+			if rs.ovAddrList6 != "" {
+				addrList6 = rs.ovAddrList6
+			}
 		}
 		mask4 := defaultMask4
 		if rs.ovMask4 >= 0 {
