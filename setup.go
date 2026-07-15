@@ -331,6 +331,13 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 						}
 						ovMask6 = n
 						i++
+					case "forward":
+						i++
+						if i >= len(args) {
+							return nil, fmt.Errorf("geosite: forward requires an address")
+						}
+						ovForward = args[i]
+						i++
 					default:
 						return nil, fmt.Errorf("geosite: unknown option %q", args[i])
 					}
