@@ -143,13 +143,14 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	// Deferred route specs preserved in config order.
 	// Override fields: empty means "use final default", mask -1 means "not set".
 	type routeSpec struct {
-		kind        string // "domains" or "geosite"
-		path        string // domains-file path or geosite code
+		kind        string
+		path        string
 		reload      time.Duration
 		ovAddrList4 string
 		ovAddrList6 string
 		ovMask4     int // -1 = not set
 		ovMask6     int // -1 = not set
+		noWrite     bool
 	}
 	var routeSpecs []routeSpec
 
