@@ -307,7 +307,7 @@ const file_geosite_proto_rawDesc = "" +
 	"\fcountry_code\x18\x01 \x01(\tR\vcountryCode\x12'\n" +
 	"\x06domain\x18\x02 \x03(\v2\x0f.geosite.DomainR\x06domain\"5\n" +
 	"\vGeoSiteList\x12&\n" +
-	"\x05entry\x18\x01 \x03(\v2\x10.geosite.GeoSiteR\x05entryB8Z6github.com/netctrldns/coredns-mikrotik/geosite;geositeb\x06proto3"
+	"\x05entry\x18\x01 \x03(\v2\x10.geosite.GeoSiteR\x05entryB7Z5github.com/BearMaxDD/coredns-mikrotik/geosite;geositeb\x06proto3"
 
 var (
 	file_geosite_proto_rawDescOnce sync.Once

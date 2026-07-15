@@ -58,7 +58,7 @@ internal.corp.com
 编辑 CoreDNS `plugin.cfg`，在 `cache` 前添加：
 
 ```
-mikrotik:github.com/netctrldns/coredns-mikrotik
+mikrotik:github.com/BearMaxDD/coredns-mikrotik
 ```
 
 然后 `make`。

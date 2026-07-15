@@ -1,4 +1,4 @@
-module github.com/netctrldns/coredns-mikrotik
+module github.com/BearMaxDD/coredns-mikrotik
 
 go 1.25.0
 

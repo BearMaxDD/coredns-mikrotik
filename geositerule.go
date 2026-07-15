@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/netctrldns/coredns-mikrotik/geosite"
+	"github.com/BearMaxDD/coredns-mikrotik/geosite"
 	"google.golang.org/protobuf/proto"
 )
 

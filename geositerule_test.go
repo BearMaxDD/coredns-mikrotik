@@ -10,7 +10,7 @@ import (
 
 	"github.com/coredns/caddy"
 	"github.com/miekg/dns"
-	"github.com/netctrldns/coredns-mikrotik/geosite"
+	"github.com/BearMaxDD/coredns-mikrotik/geosite"
 	"google.golang.org/protobuf/proto"
 )
 
