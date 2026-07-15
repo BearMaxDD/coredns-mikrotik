@@ -148,8 +148,9 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 		reload      time.Duration
 		ovAddrList4 string
 		ovAddrList6 string
-		ovMask4     int // -1 = not set
-		ovMask6     int // -1 = not set
+		ovForward   string
+		ovMask4     int
+		ovMask6     int
 		noWrite     bool
 	}
 	var routeSpecs []routeSpec
@@ -166,23 +167,26 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				if !c.NextArg() {
 					return nil, c.ArgErr()
 				}
-				path := c.Val()
-				noWrite := false
-				if c.NextArg() {
-					if c.Val() == "no-write" {
-						noWrite = true
-					} else {
+				rs := routeSpec{
+					kind:    "domains",
+					path:    c.Val(),
+					ovMask4: -1,
+					ovMask6: -1,
+				}
+				for c.NextArg() {
+					switch c.Val() {
+					case "no-write":
+						rs.noWrite = true
+					case "forward":
+						if !c.NextArg() {
+							return nil, c.Errf("domains-file: forward requires an address")
+						}
+						rs.ovForward = c.Val()
+					default:
 						return nil, c.Errf("domains-file: unknown option %q", c.Val())
 					}
 				}
-				routeSpecs = append(routeSpecs, routeSpec{
-					kind:    "domains",
-					path:    path,
-					reload:  0,
-					ovMask4: -1,
-					ovMask6: -1,
-					noWrite: noWrite,
-				})
+				routeSpecs = append(routeSpecs, rs)
 			case "reload":
 				args := c.RemainingArgs()
 				if len(args) != 1 {
@@ -277,9 +281,9 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				// Parse remaining args as key-value pairs.
 				ovAddrList4 := ""
 				ovAddrList6 := ""
+				ovForward := ""
 				ovMask4 := -1
 				ovMask6 := -1
-
 				i := 1
 				for i < len(args) {
 					switch args[i] {
@@ -326,13 +330,13 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 
 				routeSpecs = append(routeSpecs, routeSpec{
 					kind:        "geosite",
-					path:        args[0], // country code
+					path:        args[0],
 					ovAddrList4: ovAddrList4,
 					ovAddrList6: ovAddrList6,
+					ovForward:   ovForward,
 					ovMask4:     ovMask4,
 					ovMask6:     ovMask6,
 				})
-
 			case "device":
 				args := c.RemainingArgs()
 				if len(args) != 3 {
@@ -402,6 +406,11 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				addrList6 = rs.ovAddrList6
 			}
 		}
+
+		forwardAddr := defaultRouteForward
+		if rs.ovForward != "" {
+			forwardAddr = rs.ovForward
+		}
 		mask4 := defaultMask4
 		if rs.ovMask4 >= 0 {
 			mask4 = rs.ovMask4
@@ -419,7 +428,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 			}
 			m.routes = append(m.routes, RouteRule{
 				Matcher:      dl,
-				Forward:      defaultRouteForward,
+				Forward:      forwardAddr,
 				AddressList4: addrList4,
 				AddressList6: addrList6,
 				Mask4:        mask4,
@@ -432,7 +441,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 			}
 			m.routes = append(m.routes, RouteRule{
 				Matcher:      gm,
-				Forward:      defaultRouteForward,
+				Forward:      forwardAddr,
 				AddressList4: addrList4,
 				AddressList6: addrList6,
 				Mask4:        mask4,
