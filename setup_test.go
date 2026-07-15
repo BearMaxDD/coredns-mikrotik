@@ -520,12 +520,6 @@ func TestParseConfigDryRunWithArgs(t *testing.T) {
 		t.Fatal("expected error for dry-run with unexpected argument")
 	}
 }
-package mikrotik
-
-import (
-	"testing"
-	"github.com/coredns/caddy"
-)
 
 func TestParseConfigNoWrite(t *testing.T) {
 	path := writeDomainFile(t, "example.com\n")
