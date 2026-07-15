@@ -74,6 +74,7 @@ func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 // them to the MikroTik devices' queues using the RouteRule's address-list and
 // mask settings.
 func (m *Mikrotik) enqueueAddresses(resp *dns.Msg, route RouteRule, domain string) {
+	seen := make(map[string]bool)
 	for _, ans := range resp.Answer {
 		var addr, list string
 		var mask int
@@ -95,6 +96,12 @@ func (m *Mikrotik) enqueueAddresses(resp *dns.Msg, route RouteRule, domain strin
 		if mask < 0 {
 			mask = 0
 		}
+		target := applyMask(addr, mask)
+		key := list + "|" + target
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		for _, dw := range m.writers {
 			select {
 			case dw.queue <- writeItem{address: addr, list: list, mask: mask, domain: domain}:
