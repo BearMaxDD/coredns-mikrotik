@@ -1,10 +1,61 @@
 # coredns-mikrotik
 
-CoreDNS plugin 将 DNS 解析结果 IP 自动写入 MikroTik RouterOS address-list。
+CoreDNS plugin 实现域名分流 + 可选 RouterOS address-list 写入。
+
+## 功能
+
+- **域名分流** — `domains-file` 中的域名走指定上游，其他域名走默认上游
+- **geosite 支持** — 读取 V2Ray geosite.dat，按 category 匹配（`geosite cn address-list4 cn-ipv4`）
+- **子域名自动匹配** — `example.com` 自动匹配 `sub.example.com`，不匹配 `badexample.com`
+- **RouterOS 写入** — 有 `device` 配置时自动写入 address-list
+- **dry-run 模式** — 只日志不写入，方便调试
+- **mask 支持** — `mask4 24` → IP 自动 CIDR 聚合再写入
+- **timeout 续租** — 每次 DNS 命中 `set` 刷新 RouterOS timeout
+- **文件 reload** — 域名文件定时重载（±30% jitter），失败保留旧列表
+- **内存去重** — 30s 窗口避免重复写入
+- **Prometheus metrics** — `coredns_mikrotik_writes_total`, `queue_dropped_total`
+
+## Corefile 示例
+
+```
+. {
+    mikrotik {
+        device 192.168.88.1:8728 admin mypass
+        timeout 24h
+        forward 8.8.8.8
+        address-list4 default-ipv4
+        mask4 24
+
+        # Route 1: domain list
+        domains-file /etc/coredns/routes.txt
+        reload 5m
+
+        # Route 2: geosite (flat syntax)
+        geosite cn address-list4 cn-ipv4 mask4 24
+
+        # Route 3: another geosite
+        geosite google address-list4 google-ipv4 mask4 32
+
+        # dry-run 模式：只日志不写入
+        # dry-run
+    }
+    cache
+    forward . 1.1.1.1
+}
+```
+
+## routes.txt
+
+```
+# 一行一个域名，支持注释
+example.org
+google.com
+internal.corp.com
+```
 
 ## 编译
 
-编辑 CoreDNS 的 `plugin.cfg`，在 `cache` 前添加：
+编辑 CoreDNS `plugin.cfg`，在 `cache` 前添加：
 
 ```
 mikrotik:github.com/netctrldns/coredns-mikrotik
@@ -12,82 +63,49 @@ mikrotik:github.com/netctrldns/coredns-mikrotik
 
 然后 `make`。
 
-## Corefile 配置
+## 指令参考
 
-```corefile
-*.example.org {
-    mikrotik {
-        device 192.168.88.1:8728 admin mypass
-        address-list4 allowed-ipv4
-        address-list6 allowed-ipv6
-        timeout 24h
-        comment "coredns-mikrotik"
-    }
-    cache
-    forward . 8.8.8.8
-}
-```
+| 指令 | 说明 |
+|---|---|
+| `device <addr> <user> <pass>` | RouterOS 设备连接（可选，不配则不写入） |
+| `domains-file <path>` | 域名文件路径 |
+| `geosite <code>` | geosite category，后跟 `address-list4`/`mask4`/`address-list6`/`mask6` |
+| `forward <address>` | 匹配域名用的上游 DNS |
+| `address-list4 <name>` | IPv4 address-list 名称 |
+| `address-list6 <name>` | IPv6 address-list 名称 |
+| `mask4 <n>` | IPv4 CIDR mask（0-32，0 不 mask） |
+| `mask6 <n>` | IPv6 CIDR mask（0-128） |
+| `timeout <duration>` | RouterOS timeout（默认 24h） |
+| `comment <text>` | 写入 comment 标记 |
+| `reload <duration>` | 域名文件重载间隔 |
+| `dry-run` | 只日志不写入 |
 
-### 指令说明
+## geosite 域名类型
 
-- `device <address> <username> <password>` — RouterOS 设备连接参数（必需）
-- `address-list4 <name>` — IPv4 address-list 名称
-- `address-list6 <name>` — IPv6 address-list 名称
-- `timeout <duration>` — entry 超时（默认 24h），格式：`24h`、`30m`、`1h30m`
-- `comment <text>` — 写入 comment 标记
-
-### 多设备示例
-
-```
-mikrotik.internal {
-    mikrotik {
-        device 10.0.0.1:8728 admin pass
-        address-list4 mgmt-servers
-        timeout 1h
-    }
-    forward . 10.0.0.53
-}
-
-*.office.example.net {
-    mikrotik {
-        device 172.16.0.1:8728 admin pass
-        address-list4 office-users
-        address-list6 office-users-v6
-        timeout 8h
-        comment "office-coredns"
-    }
-    forward . 172.16.0.53
-}
-```
-
-## 行为
-
-- **异步写入** — ServeDNS 通过 ResponseWriter wrapper 捕获下游解析响应，非阻塞 enqueue 到有界 channel（cap=1024）。写 RouterOS 不阻塞 DNS 响应。
-- **内存去重** — 相同 `(device,list,address)` 在 30s 窗口内跳过重复写入。过期 key 惰性清理。
-- **续租** — 已有 address-list entry 自动 `set` 刷新 timeout（始终写入配置值，不依赖 RouterOS 返回的递减时间）。comment 与配置不同时才更新。
-- **IPv4/IPv6 自动分路径** — IPv4 走 `/ip/firewall/address-list/`，IPv6 走 `/ipv6/firewall/address-list/`。
-- **连接管理** — 每设备一个 worker goroutine 独占一个 `go-routeros` 连接。懒加载、故障重连、无心跳。
-- **写失败不阻塞 DNS** — 失败记日志和 metrics，worker 关闭连接后下一任务自动重连。
+| 类型 | 匹配规则 |
+|---|---|
+| `Full` | 精确匹配，`exact.test.com` 只匹配自身 |
+| `RootDomain` | 域名+子域名，`.cn` 匹配 `a.b.cn` |
+| `Plain` | 关键词子串，`google` 匹配 `googleapis.com` |
+| `Regex` | **不支持**，加载时报错 |
 
 ## Metrics
 
 | Metric | 说明 |
 |---|---|
-| `coredns_mikrotik_writes_total{device,list,status}` | 写入结果（`written` / `dedup_hit` / `error`） |
+| `coredns_mikrotik_writes_total{device,list,status}` | `written`/`dedup_hit`/`error` |
 | `coredns_mikrotik_queue_dropped_total{device}` | 队列满丢弃数 |
 
 ## 生命周期
 
-- `OnStartup` — 启动 per-device worker goroutine
-- `OnShutdown` — 关闭 stop channel，worker 做 1s drain 后关闭连接
-- 重启时丢失队列中未处理的 item（设计如此——不做持久化 outbox）
+- `OnStartup` — 启动 per-device worker
+- `OnShutdown` — Close 连接 + matcher
 
-## 开发
+## 冒烟测试
 
 ```bash
-git clone https://github.com/netctrldns/coredns-mikrotik
-cd coredns-mikrotik
-go test ./...
+cd ~/Code/coredns-mikrotik
+go test ./...  # 52+ tests, all pass
 ```
 
-依赖：`github.com/go-routeros/routeros/v3`、CoreDNS plugin API、Prometheus client_golang。
+编译进 CoreDNS 后可用 `dry-run` 模式验证分流效果。
