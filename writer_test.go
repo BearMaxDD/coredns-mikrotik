@@ -17,7 +17,7 @@ func TestProcessItemWithFakeClient(t *testing.T) {
 		client: fc,               // Pre-set to avoid real dial.
 	}
 
-	dw.processItem(context.Background(), writeItem{address: "192.168.1.1", list: "allowed", mask: 0})
+	dw.processItem(context.Background(), writeItem{address: "192.168.1.1", list: "allowed", mask: 0, domain: "test.example.com"})
 
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
@@ -37,7 +37,7 @@ func TestProcessItemCacheHit(t *testing.T) {
 		client: fc,
 	}
 
-	// Pre-set cache for the target (mask=0 means no mask, target = "192.168.1.1")
+	dw.processItem(context.Background(), writeItem{address: "192.168.1.1", list: "allowed", mask: 0, domain: "test.example.com"})
 	dw.wcache.Set(cacheKey("10.0.0.1:8728", "allowed", "192.168.1.1"))
 	dw.processItem(context.Background(), writeItem{address: "192.168.1.1", list: "allowed", mask: 0})
 
