@@ -37,8 +37,9 @@ func TestProcessItemCacheHit(t *testing.T) {
 		client: fc,
 	}
 
-	dw.processItem(context.Background(), writeItem{address: "192.168.1.1", list: "allowed", mask: 0, domain: "test.example.com"})
+	// Pre-set cache so the processItem call should be a cache hit.
 	dw.wcache.Set(cacheKey("10.0.0.1:8728", "allowed", "192.168.1.1"))
+
 	dw.processItem(context.Background(), writeItem{address: "192.168.1.1", list: "allowed", mask: 0})
 
 	fc.mu.Lock()
@@ -46,6 +47,7 @@ func TestProcessItemCacheHit(t *testing.T) {
 	if len(fc.history) != 0 {
 		t.Errorf("expected no commands sent for cached item, got %d", len(fc.history))
 	}
+
 }
 
 // TestWorkerStartStop verifies that run() blocks until stop is closed,
