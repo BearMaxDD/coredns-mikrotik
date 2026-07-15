@@ -20,6 +20,29 @@ func (dw *deviceWriter) processItem(ctx context.Context, item writeItem) {
 	target := applyMask(item.address, item.mask)
 	ck := cacheKey(dw.cfg.Address, item.list, target)
 	if dw.wcache != nil && dw.wcache.Has(ck) {
+		if dw.cfg.RefreshOnHit {
+			if err := dw.ensureConnected(ctx); err != nil {
+				log.Printf("mikrotik: dial %s: %v", dw.cfg.Address, err)
+				writesCount.WithLabelValues(dw.cfg.Address, item.list, "error").Inc()
+				dw.backoffFailure()
+				return
+			}
+			comment := item.domain
+			if comment == "" {
+				comment = dw.cfg.Comment
+			}
+			if err := writeToRouterOS(ctx, dw.client, item.address, item.list, dw.cfg.Timeout, comment, item.mask); err != nil {
+				log.Printf("mikrotik: refresh %s/%s: %v", dw.cfg.Address, item.list, err)
+				dw.closeClient()
+				writesCount.WithLabelValues(dw.cfg.Address, item.list, "error").Inc()
+				dw.backoffFailure()
+				return
+			}
+			dw.wcache.Set(ck)
+			dw.backoffSuccess()
+			writesCount.WithLabelValues(dw.cfg.Address, item.list, "written").Inc()
+			return
+		}
 		writesCount.WithLabelValues(dw.cfg.Address, item.list, "cache_hit").Inc()
 		return
 	}

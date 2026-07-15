@@ -23,6 +23,7 @@ type DeviceConfig struct {
 	AddressList6 string
 	Timeout      time.Duration
 	Comment      string
+	RefreshOnHit bool
 }
 
 // writeItem represents an address-list write request.
@@ -51,6 +52,7 @@ type Mikrotik struct {
 	routes      []RouteRule
 	listForward string
 	dryRun      bool
+	refreshOnHit bool
 	exchange    func(ctx context.Context, r *dns.Msg) (*dns.Msg, error)
 }
 
@@ -163,6 +165,12 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 					return nil, c.Err("dry-run does not accept arguments")
 				}
 				m.dryRun = true
+
+			case "refresh-on-hit":
+				if len(c.RemainingArgs()) > 0 {
+					return nil, c.Err("refresh-on-hit does not accept arguments")
+				}
+				m.refreshOnHit = true
 			case "domains-file":
 				if !c.NextArg() {
 					return nil, c.ArgErr()
@@ -388,6 +396,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	// Initialize write cache for all writers with effective TTL.
 	for _, dw := range m.writers {
 		ttl := effectiveWriteCacheTTL(writeCacheTTL, dw.cfg.Timeout)
+		dw.cfg.RefreshOnHit = m.refreshOnHit
 		dw.wcache = newWriteCache(ttl)
 	}
 
