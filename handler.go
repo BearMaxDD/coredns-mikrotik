@@ -3,6 +3,7 @@ package mikrotik
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/miekg/dns"
@@ -33,20 +34,36 @@ func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 		if err != nil {
 			return dns.RcodeServerFailure, fmt.Errorf("forward: %w", err)
 		}
-
-		if len(m.writers) > 0 && resp != nil {
+		if m.dryRun && resp != nil {
+			for _, ans := range resp.Answer {
+				var addr, list string
+				var mask int
+				switch rr := ans.(type) {
+				case *dns.A:
+					addr = rr.A.String()
+					list = route.AddressList4
+					mask = route.Mask4
+				case *dns.AAAA:
+					addr = rr.AAAA.String()
+					list = route.AddressList6
+					mask = route.Mask6
+				default:
+					continue
+				}
+				if addr == "" { continue }
+				target := applyMask(addr, mask)
+				if list != "" {
+					log.Printf("MIKROTIK dry-run: route=%q list=%s target=%s", qname, list, target)
+				}
+			}
+		} else if len(m.writers) > 0 && resp != nil {
 			m.enqueueAddresses(resp, route)
 		}
 
 		if err := w.WriteMsg(resp); err != nil {
 			return dns.RcodeServerFailure, err
 		}
-		// 传递上游返回的实际 rcode
-		rcode := resp.Rcode
-		if rcode < 0 || rcode > 0xFF {
-			rcode = dns.RcodeServerFailure
-		}
-		return rcode, nil
+		return resp.Rcode, nil
 	}
 
 	// No route matched — pass through to next plugin.

@@ -49,10 +49,8 @@ type Mikrotik struct {
 	writers     []*deviceWriter
 	routes      []RouteRule
 	listForward string
-
-	// exchange, if set, is used by ServeDNS instead of resolveWithForward.
-	// Used for testing; nil in production.
-	exchange func(ctx context.Context, r *dns.Msg) (*dns.Msg, error)
+	dryRun      bool
+	exchange    func(ctx context.Context, r *dns.Msg) (*dns.Msg, error)
 }
 
 // resolveWithForward forwards a DNS query to the given upstream address.
@@ -156,6 +154,11 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 	for c.Next() {
 		for c.NextBlock() {
 			switch c.Val() {
+			case "dry-run":
+				if len(c.RemainingArgs()) > 0 {
+					return nil, c.Err("dry-run does not accept arguments")
+				}
+				m.dryRun = true
 			case "domains-file":
 				args := c.RemainingArgs()
 				if len(args) != 1 {
@@ -164,7 +167,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 				routeSpecs = append(routeSpecs, routeSpec{
 					kind:    "domains",
 					path:    args[0],
-					reload:  reloadInterval,
+					reload:  0, // 在 route 构建阶段用最终 reloadInterval
 					ovMask4: -1,
 					ovMask6: -1,
 				})
@@ -375,7 +378,7 @@ func parseConfig(c *caddy.Controller) (*Mikrotik, error) {
 
 		switch rs.kind {
 		case "domains":
-			dl, err := NewDomainList(rs.path, rs.reload)
+			dl, err := NewDomainList(rs.path, reloadInterval)
 			if err != nil {
 				return nil, fmt.Errorf("loading domains-file: %v", err)
 			}

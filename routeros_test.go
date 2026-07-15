@@ -146,7 +146,7 @@ func TestWriteToRouterOS_Add(t *testing.T) {
 	}
 
 	// First call: print
-	wantPrint := []string{"/ip/firewall/address-list/print", "?address=10.0.0.5", "?list=allowed"}
+	wantPrint := []string{"/ip/firewall/address-list/print", "?address=10.0.0.0/24", "?list=allowed"}
 	if !slicesEqual(fc.history[0], wantPrint) {
 		t.Errorf("print call args = %v; want %v", fc.history[0], wantPrint)
 	}
@@ -196,9 +196,8 @@ func TestWriteToRouterOS_UpdateExisting(t *testing.T) {
 	if len(fc.history) != 2 {
 		t.Fatalf("expected 2 client calls, got %d", len(fc.history))
 	}
-
+	wantPrint := []string{"/ip/firewall/address-list/print", "?address=10.0.0.0/24", "?list=allowed"}
 	// First call: print
-	wantPrint := []string{"/ip/firewall/address-list/print", "?address=10.0.0.5", "?list=allowed"}
 	if !slicesEqual(fc.history[0], wantPrint) {
 		t.Errorf("print call args = %v; want %v", fc.history[0], wantPrint)
 	}

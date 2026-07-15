@@ -491,3 +491,32 @@ func TestParseConfigUnknownDirective(t *testing.T) {
 		t.Fatal("expected error for unknown directive")
 	}
 }
+
+func TestParseConfigDryRun(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    dry-run
+}`
+	c := caddy.NewTestController("dns", corefile)
+	m, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !m.dryRun {
+		t.Fatal("expected dryRun=true")
+	}
+}
+
+func TestParseConfigDryRunWithArgs(t *testing.T) {
+	domainPath := writeDomainFile(t, "example.com\n")
+	corefile := `mikrotik {
+    domains-file ` + domainPath + `
+    dry-run extra-arg
+}`
+	c := caddy.NewTestController("dns", corefile)
+	_, err := parseConfig(c)
+	if err == nil {
+		t.Fatal("expected error for dry-run with unexpected argument")
+	}
+}

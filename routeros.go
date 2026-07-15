@@ -72,11 +72,12 @@ func applyMask(addr string, mask int) string {
 func writeToRouterOS(ctx context.Context, client rosClient, addr, list string, timeout time.Duration, comment string, mask int) error {
 	cmdPath := cmdPathForAddr(addr)
 	wantTimeout := timeoutToRouterOSString(timeout)
+	target := applyMask(addr, mask) // print 和 add 都用同一 target
 
 	// Query for an existing entry.
 	reply, err := client.RunArgsContext(ctx, []string{
 		cmdPath + "/print",
-		"?address=" + addr,
+		"?address=" + target,
 		"?list=" + list,
 	})
 	if err != nil {
@@ -99,10 +100,9 @@ func writeToRouterOS(ctx context.Context, client rosClient, addr, list string, t
 	}
 
 	// No existing entry – add.
-	masked := applyMask(addr, mask)
 	addArgs := []string{
 		cmdPath + "/add",
-		"=address=" + masked,
+		"=address=" + target,
 		"=list=" + list,
 		"=timeout=" + wantTimeout,
 	}
