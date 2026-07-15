@@ -17,6 +17,9 @@ func (m *Mikrotik) Name() string { return "mikrotik" }
 // the address-list queue, and returns the response. If no route matches, the
 // query is passed through to the next plugin.
 func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	if r == nil || len(r.Question) == 0 {
+		return m.Next.ServeDNS(ctx, w, r)
+	}
 	qname := r.Question[0].Name
 	domain := strings.ToLower(strings.TrimSuffix(qname, "."))
 	for _, route := range m.routes {
