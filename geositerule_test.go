@@ -309,7 +309,7 @@ func TestEnqueueAddressesPerRoute(t *testing.T) {
 		Mask6:        48,
 	}
 
-	m.enqueueAddresses(resp, route)
+	m.enqueueAddresses(resp, route, "test.example.com")
 
 	var items []writeItem
 	for {

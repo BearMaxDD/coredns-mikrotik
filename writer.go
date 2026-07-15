@@ -9,7 +9,6 @@ import (
 )
 
 // processItem handles a single address-list write request.
-// cache key uses masked target; writeToRouterOS gets raw address + mask.
 func (dw *deviceWriter) processItem(ctx context.Context, item writeItem) {
 	// 1. 失败退避检查
 	if !dw.nextAllowed.IsZero() && time.Now().Before(dw.nextAllowed) {
@@ -17,7 +16,7 @@ func (dw *deviceWriter) processItem(ctx context.Context, item writeItem) {
 		return
 	}
 
-	// 2. Write-cache：用 mask 后的 target 做 key
+	// 2. Write-cache 检查（用 mask 后的 target）
 	target := applyMask(item.address, item.mask)
 	ck := cacheKey(dw.cfg.Address, item.list, target)
 	if dw.wcache != nil && dw.wcache.Has(ck) {
@@ -33,8 +32,12 @@ func (dw *deviceWriter) processItem(ctx context.Context, item writeItem) {
 		return
 	}
 
-	// 4. 写入 RouterOS（传原始 item.address，writeToRouterOS 内部做 mask）
-	err := writeToRouterOS(ctx, dw.client, item.address, item.list, dw.cfg.Timeout, dw.cfg.Comment, item.mask)
+	// 4. 写入 RouterOS（comment = 域名，去尾部 dot）
+	comment := item.domain
+	if comment == "" {
+		comment = dw.cfg.Comment // fallback
+	}
+	err := writeToRouterOS(ctx, dw.client, item.address, item.list, dw.cfg.Timeout, comment, item.mask)
 	if err != nil {
 		log.Printf("mikrotik: write %s/%s: %v", dw.cfg.Address, item.list, err)
 		dw.closeClient()

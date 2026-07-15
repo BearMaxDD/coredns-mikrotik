@@ -1,0 +1,30 @@
+.:5365 {
+    log
+    errors
+
+    mikrotik {
+        # 域名列表（一行一个）
+        domains-file /opt/core-dns/quhong/doamin/openai.txt
+        reload 5m
+
+        # 【重要】替换为真实的 RouterOS 设备信息后再移除 dry-run
+        device 192.168.88.1:8728 admin your_password_here
+        address-list4 openai-ipv4
+        mask4 32                    # 32=逐IP; 24= /24 网段
+        timeout 24h
+        comment "coredns-openai"
+        write-cache-ttl 1h
+        forward 119.29.29.29
+
+        # 【安全默认】当前 dry-run 已启用，只日志不写入
+        # 确认日志无误后，删除或注释掉本行即开启真实写入
+        dry-run
+    }
+
+    cache {
+        success 1024 60
+        denial 512 30
+    }
+
+    forward . 119.29.29.29
+}

@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/miekg/dns"
 )
-
 // Name implements plugin.Handler.
 func (m *Mikrotik) Name() string { return "mikrotik" }
 
@@ -18,7 +18,7 @@ func (m *Mikrotik) Name() string { return "mikrotik" }
 // query is passed through to the next plugin.
 func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	qname := r.Question[0].Name
-
+	domain := strings.ToLower(strings.TrimSuffix(qname, "."))
 	for _, route := range m.routes {
 		if route.Matcher == nil || !route.Matcher.Match(qname) {
 			continue
@@ -57,7 +57,7 @@ func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 				}
 			}
 		} else if len(m.writers) > 0 && resp != nil {
-			m.enqueueAddresses(resp, route)
+			m.enqueueAddresses(resp, route, domain)
 		}
 
 		if err := w.WriteMsg(resp); err != nil {
@@ -73,7 +73,7 @@ func (m *Mikrotik) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 // enqueueAddresses extracts A and AAAA addresses from the response and writes
 // them to the MikroTik devices' queues using the RouteRule's address-list and
 // mask settings.
-func (m *Mikrotik) enqueueAddresses(resp *dns.Msg, route RouteRule) {
+func (m *Mikrotik) enqueueAddresses(resp *dns.Msg, route RouteRule, domain string) {
 	for _, ans := range resp.Answer {
 		var addr, list string
 		var mask int
@@ -97,7 +97,7 @@ func (m *Mikrotik) enqueueAddresses(resp *dns.Msg, route RouteRule) {
 		}
 		for _, dw := range m.writers {
 			select {
-			case dw.queue <- writeItem{address: addr, list: list, mask: mask}:
+			case dw.queue <- writeItem{address: addr, list: list, mask: mask, domain: domain}:
 			default:
 				queueDroppedCount.WithLabelValues(dw.cfg.Address).Inc()
 			}

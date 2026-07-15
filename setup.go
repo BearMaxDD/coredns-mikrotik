@@ -30,6 +30,7 @@ type writeItem struct {
 	address string
 	list    string
 	mask    int
+	domain  string
 }
 
 type deviceWriter struct {
